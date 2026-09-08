@@ -12,7 +12,14 @@ import time
 import json
 import textwrap
 from d3_sankey import create_d3_sankey_html
-from gemini_backend import generate_dynamic_taxonomy, generate_dynamic_prompts, generate_dynamic_evaluations, generate_dynamic_autoratings
+from gemini_backend import (
+    generate_dynamic_taxonomy,
+    generate_dynamic_prompts,
+    generate_dynamic_evaluations,
+    generate_dynamic_autoratings,
+    generate_credible_sources,
+    fetch_citation_for_node,
+)
 
 # Page config
 st.set_page_config(page_title="NodeSynth Taxonomy Demo", page_icon="🔗", layout="wide")
@@ -1063,6 +1070,8 @@ elif st.session_state.step == "Taxonomy":
             if ('selected_l3' not in st.session_state) or (st.session_state.get('selected_l3') not in tree_df['level3'].values):
                 if not tree_df.empty:
                     st.session_state.selected_l3 = tree_df.iloc[0]['level3']
+                    st.session_state.selected_l1 = tree_df.iloc[0]['level1']
+                    st.session_state.selected_l2 = tree_df.iloc[0]['level2']
 
             # Container for the split view
             st.markdown('<div class="content-card">', unsafe_allow_html=True)
@@ -1080,6 +1089,8 @@ elif st.session_state.step == "Taxonomy":
                                 for l3 in l3_items:
                                     if st.button(f"👉 **L3** {l3}", key=f"btn_{l1}_{l2}_{l3}", use_container_width=True):
                                         st.session_state.selected_l3 = l3
+                                        st.session_state.selected_l1 = l1
+                                        st.session_state.selected_l2 = l2
             
             # CSS specifically for the L3 buttons to make them look clickable
             st.markdown("""
@@ -1116,6 +1127,10 @@ elif st.session_state.step == "Taxonomy":
                      df_search['level3_list'] = df_search['level3'].apply(safe_eval_list)
                      df_exploded = df_search.explode('level3_list')
                      match = df_exploded[df_exploded['level3_list'] == st.session_state.selected_l3]
+                     if 'selected_l1' in st.session_state and 'selected_l2' in st.session_state:
+                         sub_match = match[(match['level1'] == st.session_state.selected_l1) & (match['level2'] == st.session_state.selected_l2)]
+                         if not sub_match.empty:
+                             match = sub_match
                      
                      if not match.empty:
                          node_data = match.iloc[0]
@@ -1170,32 +1185,106 @@ elif st.session_state.step == "Taxonomy":
                          # Research Citations
                          st.markdown("📖 **RESEARCH CITATIONS**")
                          
-                         title = "Research Paper"
                          import re
-                         paper = str(node_data.get('paper_content', ''))
-                         title_match = re.search(r'\*\*Title:\*\*\s*(?:\"(.*?)\"|(.*?)\n)', paper)
-                         if title_match:
-                              title = (title_match.group(1) or title_match.group(2) or "Citation 1").strip()
-                             
-                         url_val = node_data.get('url', '')
-                         if isinstance(url_val, str) and url_val.startswith('['):
-                             try: url_val = eval(url_val)
-                             except: pass
-                             
-                         if isinstance(url_val, list):
-                             if url_val:
-                                 st.markdown(f"- [{title}]({url_val[0]})")
-                             else:
-                                 st.write("No external URL linked.")
-                         elif isinstance(url_val, str) and url_val:
-                             st.markdown(f"- [{title}]({url_val})")
+
+                         def parse_to_list(val):
+                             if val is None:
+                                 return []
+                             if isinstance(val, list):
+                                 return [str(v).strip() for v in val if str(v).strip()]
+                             if isinstance(val, str):
+                                 s = val.strip()
+                                 if s.startswith("[") and s.endswith("]"):
+                                     try:
+                                         parsed = eval(s)
+                                         if isinstance(parsed, list):
+                                             return [str(v).strip() for v in parsed if str(v).strip()]
+                                     except Exception:
+                                         pass
+                                 return [s] if s else []
+                             return []
+
+                         paper_urls = parse_to_list(node_data.get('paper_urls'))
+                         if not paper_urls:
+                             paper_urls = parse_to_list(node_data.get('url'))
+
+                         paper_titles = parse_to_list(node_data.get('paper_titles'))
+                         paper_content = str(node_data.get('paper_content', '')).strip()
+
+                         if not paper_titles and paper_content:
+                             t_match = re.search(r'(?:\*\*Title:\*\*|Title:)\s*(?:\"(.*?)\"|(.*?)(?:;|\n|$))', paper_content, re.IGNORECASE)
+                             if t_match:
+                                 found_title = (t_match.group(1) or t_match.group(2) or "").strip()
+                                 if found_title:
+                                     paper_titles.append(found_title)
+
+                         if paper_urls:
+                             for i, u in enumerate(paper_urls):
+                                 if i < len(paper_titles) and paper_titles[i]:
+                                     item_title = paper_titles[i]
+                                 elif paper_titles:
+                                     item_title = f"{paper_titles[0]} (Source {i+1})"
+                                 else:
+                                     item_title = f"Published Research Paper {i+1}"
+                                 st.markdown(f"- 📄 [**{item_title}**]({u})")
                          else:
-                              # fallback paper content
-                              paper = node_data.get('paper_content', '')
-                              if paper:
-                                  st.info("Citations available in internal knowledge source.")
-                              else:
-                                  st.write("No citations available.")
+                             st.write("No external URL linked.")
+
+                         if paper_content and paper_content != "None":
+                             with st.expander("📑 Grounded Paper Context & Demographics", expanded=False):
+                                 st.markdown(f"<div style='font-size:0.85rem; color:#475569; white-space:pre-wrap;'>{paper_content}</div>", unsafe_allow_html=True)
+
+                         # Interactive Grounding Button
+                         st.markdown("<div style='margin-top: 12px;'>", unsafe_allow_html=True)
+                         col_ground_btn, _ = st.columns([1.8, 1])
+                         with col_ground_btn:
+                             l1_tag = str(node_data.get('level1', 'L1')).replace(' ', '_')
+                             l2_tag = str(node_data.get('level2', 'L2')).replace(' ', '_')
+                             l3_tag = str(st.session_state.selected_l3).replace(' ', '_')
+                             btn_key = f"ground_btn_{l1_tag}_{l2_tag}_{l3_tag}"
+                             if st.button("🔍 Ground Node with Google Search", key=btn_key, use_container_width=True):
+                                 resolved_key = (
+                                     st.session_state.get("gemini_api_key")
+                                     or os.environ.get("GEMINI_API_KEY")
+                                     or os.environ.get("GOOGLE_API_KEY")
+                                 )
+                                 if not resolved_key:
+                                     st.error("⚠️ Please provide a Gemini API Key in the Concept step to ground with Google Search.")
+                                 else:
+                                     with st.spinner("Searching for published research papers via Google Search grounding..."):
+                                         try:
+                                             curr_l1 = node_data.get('level1', 'General')
+                                             curr_l2 = node_data.get('level2', 'General')
+                                             curr_l3 = st.session_state.selected_l3
+                                             curr_domain = node_data.get('Domain', st.session_state.get('saved_concept', 'Domain'))
+                                             res_ground = fetch_citation_for_node(
+                                                 domain=curr_domain,
+                                                 category=curr_l1,
+                                                 topic=curr_l2,
+                                                 keywords=curr_l3,
+                                                 api_key=resolved_key,
+                                                 model="gemini-2.5-flash",
+                                             )
+                                             if 'demo_data' in st.session_state and not st.session_state.demo_data.empty:
+                                                 df_up = st.session_state.demo_data.copy()
+                                                 for r_i, r_val in df_up.iterrows():
+                                                     l3_val = r_val.get('level3', '')
+                                                     match_found = False
+                                                     if isinstance(l3_val, list) and curr_l3 in l3_val:
+                                                          match_found = True
+                                                     elif str(l3_val) == str(curr_l3) or curr_l3 in str(l3_val):
+                                                          match_found = True
+                                                     if match_found and str(r_val.get('level1', '')) == str(curr_l1) and str(r_val.get('level2', '')) == str(curr_l2):
+                                                          df_up.at[r_i, 'paper_urls'] = res_ground['paper_urls']
+                                                          df_up.at[r_i, 'paper_titles'] = res_ground['paper_titles']
+                                                          df_up.at[r_i, 'url'] = res_ground['url']
+                                                          df_up.at[r_i, 'paper_content'] = res_ground['paper_content']
+                                                 st.session_state.demo_data = df_up
+                                                 st.success(f"✅ Successfully grounded '{curr_l3}' with published research papers!")
+                                                 st.rerun()
+                                         except Exception as exc:
+                                             st.error(f"Search grounding error: {str(exc)}")
+                         st.markdown("</div>", unsafe_allow_html=True)
                      else:
                          st.warning("Data not found for this node.")
             st.markdown('</div>', unsafe_allow_html=True)

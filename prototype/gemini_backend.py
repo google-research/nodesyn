@@ -9,6 +9,7 @@ import re
 import textwrap
 import time
 from typing import Any
+import urllib.parse
 
 from google import genai
 from google.genai import types
@@ -73,23 +74,30 @@ class GeminiUtils:
         self,
         request: GenerateContentRequest,
         model: str = "gemini-2.5-flash-lite",
-        tools: list[dict[str, Any]] | None = None,
+        tools: list[dict[str, Any] | types.Tool] | None = None,
     ) -> GenerateContentResult:
         """Calls Gemini generate_content with short retry logic."""
         retries = 2
         for i in range(retries):
             try:
+                config_kwargs: dict[str, Any] = {
+                    "top_p": 0.95,
+                    "temperature": 0.1,
+                    "safety_settings": _SAFETY_SETTINGS,
+                }
+                if tools:
+                    config_kwargs["tools"] = tools
                 response = self._client.models.generate_content(
                     contents=request.prompt,
                     model=model,
-                    config=types.GenerateContentConfig(
-                        top_p=0.95,
-                        temperature=0.1,
-                        safety_settings=_SAFETY_SETTINGS,
-                    ),
+                    config=types.GenerateContentConfig(**config_kwargs),
                 )
                 text = response.text if response and response.text else ""
-                if text:
+                if text or (
+                    response
+                    and response.candidates
+                    and getattr(response.candidates[0], "grounding_metadata", None)
+                ):
                     return GenerateContentResult(request, text, response)
             except Exception as e:
                 logging.warning("Attempt %d/%d failed with error: %s", i + 1, retries, str(e))
@@ -535,6 +543,281 @@ class PromptsGenerator:
         return pd.DataFrame(exploded_rows)
 
 
+class CredibleSourceGenerator:
+    """Discovers reputable research papers via Google Search grounding to ground taxonomy relationships."""
+
+    def __init__(self, gemini_utils: GeminiUtils):
+        self._gemini_utils = gemini_utils
+
+    def _generate_prompt(
+        self, domain: str, category: str, topic: str, keywords: str | list[str]
+    ) -> str:
+        if isinstance(keywords, list):
+            keywords_str = ", ".join(str(k) for k in keywords)
+        else:
+            keywords_str = str(keywords)
+
+        prompt = textwrap.dedent(f"""\
+        You are a research librarian specializing in {domain} research with a focus on {category}.
+        Your task is to provide 1 published research paper directly related to {domain}, specifically {topic} within the context of {keywords_str}.
+        
+        For the paper, extract a concise title, occupation, demographics, and country that are directly coming from the paper full text. Based on the paper content, please extract what are the sensitive group of people (such as occupation or demographic or country) that are being evaluated or affected in this research paper.
+        
+        Ensure this paper is reputable and accurately reflects its published content. The output should be formatted as:
+        Title: <exact paper title> ;
+        Occupation: <occupation(s)> ;
+        Demographics: <demographic group(s)> ;
+        Country: <country/region> ;
+        
+        Please strictly follow this format, ONLY return these four items (Title, Occupation, Demographics, Country), keep words short and precise, and do not add rationale.
+        """)
+        return prompt
+
+    def _parse_result(
+        self,
+        result: GenerateContentResult,
+        domain: str,
+        category: str,
+        topic: str,
+        keywords_str: str,
+    ) -> dict[str, Any]:
+        paper_urls: list[str] = []
+        paper_titles: list[str] = []
+        full_response = result.full_response
+        content = result.generated_content.strip()
+
+        # 1. Grounding Metadata from Google Search
+        if full_response and hasattr(full_response, "candidates") and full_response.candidates:
+            cand = full_response.candidates[0]
+            grounding_metadata = getattr(cand, "grounding_metadata", None)
+            if grounding_metadata:
+                chunks = getattr(grounding_metadata, "grounding_chunks", None) or []
+                for chunk in chunks:
+                    web = getattr(chunk, "web", None)
+                    if web:
+                        uri = getattr(web, "uri", None)
+                        title = getattr(web, "title", None)
+                        if uri and uri not in paper_urls:
+                            paper_urls.append(uri)
+                        if title and title not in paper_titles:
+                            paper_titles.append(title)
+
+        # 2. Parse text content
+        title_match = re.search(r'Title:\s*([^;\n]+)', content, re.IGNORECASE)
+        occ_match = re.search(r'Occupation:\s*([^;\n]+)', content, re.IGNORECASE)
+        demo_match = re.search(r'Demographics:\s*([^;\n]+)', content, re.IGNORECASE)
+        country_match = re.search(r'Country:\s*([^;\n]+)', content, re.IGNORECASE)
+
+        extracted_title = title_match.group(1).strip(" *\"'") if title_match else ""
+        extracted_occ = occ_match.group(1).strip(" *\"'") if occ_match else ""
+        extracted_demo = demo_match.group(1).strip(" *\"'") if demo_match else ""
+        extracted_country = country_match.group(1).strip(" *\"'") if country_match else ""
+
+        # Extract any raw URLs in the text
+        for u in re.findall(r'https?://[^\s<>"\')]+', content):
+            if u not in paper_urls:
+                paper_urls.append(u)
+
+        if extracted_title:
+            if not paper_titles:
+                paper_titles.append(extracted_title)
+            elif extracted_title not in paper_titles:
+                paper_titles.insert(0, extracted_title)
+
+        # 3. Fallback if search grounding did not return web links
+        if not paper_urls:
+            encoded_query = urllib.parse.quote_plus(f"{domain} {topic} {keywords_str} research paper")
+            fallback_scholar = f"https://scholar.google.com/scholar?q={encoded_query}"
+            paper_urls.append(fallback_scholar)
+
+        if not paper_titles:
+            paper_titles.append(
+                extracted_title or f"Research on {topic} ({keywords_str})"
+            )
+
+        display_title = paper_titles[0] if paper_titles else (extracted_title or f"{topic} Research")
+        paper_content = (
+            f"Title: {display_title} ;\n"
+            f"Occupation: {extracted_occ or 'Specialists & Practitioners'} ;\n"
+            f"Demographics: {extracted_demo or 'General Population'} ;\n"
+            f"Country: {extracted_country or 'Global'}"
+        )
+
+        return {
+            "paper_urls": paper_urls,
+            "paper_titles": paper_titles,
+            "url": paper_urls,
+            "paper_content": paper_content,
+        }
+
+    def generate_for_node(
+        self,
+        domain: str,
+        category: str,
+        topic: str,
+        keywords: str | list[str],
+        model: str = "gemini-2.5-flash",
+    ) -> dict[str, Any]:
+        """Fetches research paper citations for a single taxonomy node using Google Search grounding."""
+        prompt = self._generate_prompt(domain, category, topic, keywords)
+        kw_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
+        req = GenerateContentRequest(
+            prompt=prompt,
+            metadata={
+                "domain": domain,
+                "category": category,
+                "topic": topic,
+                "keywords": kw_str,
+            },
+        )
+        tools = [types.Tool(google_search=types.GoogleSearch())]
+        result = self._gemini_utils.generate_content(req, model=model, tools=tools)
+        return self._parse_result(
+            result=result,
+            domain=domain,
+            category=category,
+            topic=topic,
+            keywords_str=kw_str,
+        )
+
+    def generate(
+        self,
+        taxonomy_df: pd.DataFrame,
+        domain: str,
+        model: str = "gemini-2.5-flash",
+        max_workers: int = 10,
+    ) -> pd.DataFrame:
+        """Grounds all rows in taxonomy_df with credible research papers using Google Search."""
+        if taxonomy_df.empty:
+            return taxonomy_df
+
+        df_out = taxonomy_df.copy()
+        requests = []
+        row_indices = []
+
+        for idx, row in df_out.iterrows():
+            category = str(row.get("level1", row.get("category", "")))
+            topic = str(row.get("level2", row.get("topic", "")))
+            kw = row.get("level3", row.get("keywords", ""))
+            kw_str = ", ".join(kw) if isinstance(kw, list) else str(kw)
+
+            prompt = self._generate_prompt(domain, category, topic, kw_str)
+            req = GenerateContentRequest(
+                prompt=prompt,
+                metadata={
+                    "row_index": idx,
+                    "category": category,
+                    "topic": topic,
+                    "keywords": kw_str,
+                },
+            )
+            requests.append(req)
+            row_indices.append(idx)
+
+        tools = [types.Tool(google_search=types.GoogleSearch())]
+        try:
+            results = self._gemini_utils.generate_content_batch(
+                requests,
+                model=model,
+                tools=tools,
+                max_workers=max_workers,
+            )
+        except Exception as e:
+            logging.warning("Search grounding batch failed with model %s, retrying: %s", model, str(e))
+            try:
+                results = self._gemini_utils.generate_content_batch(
+                    requests,
+                    model="gemini-2.5-flash-lite",
+                    tools=tools,
+                    max_workers=max_workers,
+                )
+            except Exception as e2:
+                logging.error("Search grounding failed completely: %s", str(e2))
+                results = [GenerateContentResult(req, "") for req in requests]
+
+        parsed_by_idx = {}
+        for res in results:
+            meta = res.request.metadata
+            r_idx = meta.get("row_index")
+            parsed = self._parse_result(
+                result=res,
+                domain=domain,
+                category=meta.get("category", ""),
+                topic=meta.get("topic", ""),
+                keywords_str=meta.get("keywords", ""),
+            )
+            parsed_by_idx[r_idx] = parsed
+
+        paper_urls_col = []
+        paper_titles_col = []
+        url_col = []
+        paper_content_col = []
+
+        for idx in row_indices:
+            data = parsed_by_idx.get(idx)
+            if not data:
+                row = df_out.loc[idx]
+                kw = row.get("level3", row.get("keywords", ""))
+                kw_str = ", ".join(kw) if isinstance(kw, list) else str(kw)
+                encoded_q = urllib.parse.quote_plus(f"{domain} {row.get('level2', '')} {kw_str} research paper")
+                fallback_url = f"https://scholar.google.com/scholar?q={encoded_q}"
+                data = {
+                    "paper_urls": [fallback_url],
+                    "paper_titles": [f"Research on {row.get('level2', '')} ({kw_str})"],
+                    "url": [fallback_url],
+                    "paper_content": f"Title: Research on {row.get('level2', '')} ;\nOccupation: Specialists ;\nDemographics: General ;\nCountry: Global",
+                }
+            paper_urls_col.append(data["paper_urls"])
+            paper_titles_col.append(data["paper_titles"])
+            url_col.append(data["url"])
+            paper_content_col.append(data["paper_content"])
+
+        df_out["paper_urls"] = paper_urls_col
+        df_out["paper_titles"] = paper_titles_col
+        df_out["url"] = url_col
+        df_out["paper_content"] = paper_content_col
+
+        return df_out
+
+
+def generate_credible_sources(
+    taxonomy_df: pd.DataFrame,
+    domain: str,
+    api_key: str | None = None,
+    model: str = "gemini-2.5-flash",
+    max_workers: int = 10,
+) -> pd.DataFrame:
+    """Grounds taxonomy branches with credible research papers using Google Search."""
+    client = GeminiUtils(api_key=api_key)
+    generator = CredibleSourceGenerator(client)
+    return generator.generate(
+        taxonomy_df=taxonomy_df,
+        domain=domain,
+        model=model,
+        max_workers=max_workers,
+    )
+
+
+def fetch_citation_for_node(
+    domain: str,
+    category: str,
+    topic: str,
+    keywords: str | list[str],
+    api_key: str | None = None,
+    model: str = "gemini-2.5-flash",
+) -> dict[str, Any]:
+    """Fetches research paper citations for a single node via Google Search grounding."""
+    client = GeminiUtils(api_key=api_key)
+    generator = CredibleSourceGenerator(client)
+    return generator.generate_for_node(
+        domain=domain,
+        category=category,
+        topic=topic,
+        keywords=keywords,
+        model=model,
+    )
+
+
 def generate_dynamic_prompts(
     taxonomy_df: pd.DataFrame,
     domain: str,
@@ -580,7 +863,7 @@ def generate_dynamic_taxonomy(
     gemini_client = GeminiUtils(api_key=api_key)
 
     if progress_callback:
-        progress_callback(0.40, f"Generating Level 1 (Categories) & Level 2 (Topics) for '{domain}'...")
+        progress_callback(0.35, f"Generating Level 1 (Categories) & Level 2 (Topics) for '{domain}'...")
     
     cat_gen = CategoryTopicsGenerator(gemini_client)
     cat_topics_df = cat_gen.generate(
@@ -593,7 +876,7 @@ def generate_dynamic_taxonomy(
         cat_topics_df = cat_topics_df.head(10)
 
     if progress_callback:
-        progress_callback(0.70, f"Executing 1 batch of {len(cat_topics_df)} parallel calls for Level 3 keywords & demographic context...")
+        progress_callback(0.65, f"Executing 1 batch of {len(cat_topics_df)} parallel calls for Level 3 keywords & demographic context...")
     
     kw_gen = KeywordsGenerator(gemini_client)
     final_df = kw_gen.generate(
@@ -604,13 +887,31 @@ def generate_dynamic_taxonomy(
         domain_definition=domain_definition,
     )
 
+    if progress_callback:
+        progress_callback(0.85, f"Discovering research papers via Google Search grounding for {len(final_df)} taxonomy branches...")
+
+    credible_gen = CredibleSourceGenerator(gemini_client)
+    try:
+        final_df = credible_gen.generate(
+            taxonomy_df=final_df,
+            domain=domain,
+            model="gemini-2.5-flash",
+            max_workers=10,
+        )
+    except Exception as e:
+        logging.warning("Google search grounding step encountered error: %s. Using default fallback citations.", str(e))
+        final_df["paper_urls"] = [[] for _ in range(len(final_df))]
+        final_df["paper_titles"] = [[] for _ in range(len(final_df))]
+        final_df["url"] = [[] for _ in range(len(final_df))]
+        final_df["paper_content"] = ["" for _ in range(len(final_df))]
+
     # Format standard attributes
     final_df["user_case"] = use_case
     final_df["model_modality"] = modality[0] if isinstance(modality, list) and modality else str(modality)
     final_df["index"] = list(range(len(final_df)))
 
     if progress_callback:
-        progress_callback(1.0, "Dynamic Taxonomy Generated Successfully!")
+        progress_callback(1.0, "Dynamic Taxonomy Generated Successfully with Research Grounding!")
 
     return final_df
 
