@@ -14,7 +14,7 @@ def create_d3_sankey_html(df_final, height=700, scale_factor=1.0):
         return "<p>No data</p>"
 
     # --- Data processing (mirrors the original Plotly pipeline) ---
-    df_temp = df_final.copy()
+    df_temp = df_final.loc[:, ~df_final.columns.duplicated()].copy()
 
     def safe_eval_list(x):
         if isinstance(x, str) and x.strip().startswith('['):
@@ -33,13 +33,22 @@ def create_d3_sankey_html(df_final, height=700, scale_factor=1.0):
         if col in df_exploded.columns:
             df_exploded = df_exploded.explode(col)
     df_exploded = df_exploded.reset_index(drop=True)
-    df_exploded.rename(columns={'extracted_Country': 'cleaned_Country'}, inplace=True)
+
+    if 'extracted_Country' in df_exploded.columns and 'cleaned_Country' not in df_exploded.columns:
+        df_exploded.rename(columns={'extracted_Country': 'cleaned_Country'}, inplace=True)
+    elif 'extracted_Country' in df_exploded.columns and 'cleaned_Country' in df_exploded.columns:
+        df_exploded.drop(columns=['extracted_Country'], inplace=True, errors='ignore')
+
+    df_exploded = df_exploded.loc[:, ~df_exploded.columns.duplicated()]
 
     flow_cols = ['Domain', 'level1', 'level2', 'level3', 'user_group', 'cleaned_Country']
     flow_cols = [c for c in flow_cols if c in df_exploded.columns]
 
     for col in flow_cols:
-        df_exploded[col] = df_exploded[col].astype(str).str.replace('-', '', regex=False).str.strip()
+        series_col = df_exploded[col]
+        if isinstance(series_col, pd.DataFrame):
+            series_col = series_col.iloc[:, 0]
+        df_exploded[col] = series_col.astype(str).str.replace('-', '', regex=False).str.strip()
         df_exploded[col] = df_exploded[col].replace({
             'UK': 'United Kingdom', 'USA': 'United States',
             'US': 'United States', 'America': 'United States'
