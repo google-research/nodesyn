@@ -1221,73 +1221,61 @@ elif st.session_state.step == "Taxonomy":
                                  if found_title:
                                      paper_titles.append(found_title)
 
-                         if paper_urls:
-                             for i, u in enumerate(paper_urls):
-                                 if i < len(paper_titles) and paper_titles[i]:
-                                     item_title = paper_titles[i]
-                                 elif paper_titles:
-                                     item_title = f"{paper_titles[0]} (Source {i+1})"
-                                 else:
-                                     item_title = f"Published Research Paper {i+1}"
-                                 st.markdown(f"- 📄 [**{item_title}**]({u})")
-                         else:
-                             st.write("No external URL linked.")
+                         is_dynamic_mode = st.session_state.get('data_mode') == 'dynamic'
 
-                         if paper_content and paper_content != "None":
+                         # Auto-fetch directly if in dynamic mode and citations have not been populated
+                         if is_dynamic_mode and ('paper_urls' not in node_data or node_data.get('paper_urls') is None or (isinstance(node_data.get('paper_urls'), list) and len(node_data.get('paper_urls')) == 0 and not node_data.get('paper_titles'))):
+                             resolved_key = (
+                                 st.session_state.get("gemini_api_key")
+                                 or os.environ.get("GEMINI_API_KEY")
+                                 or os.environ.get("GOOGLE_API_KEY")
+                             )
+                             if resolved_key:
+                                 with st.spinner("Fetching research citation directly with Google Search..."):
+                                     try:
+                                         curr_l1 = node_data.get('level1', 'General')
+                                         curr_l2 = node_data.get('level2', 'General')
+                                         curr_l3 = st.session_state.selected_l3
+                                         curr_domain = node_data.get('Domain', st.session_state.get('saved_concept', 'Domain'))
+                                         res_ground = fetch_citation_for_node(
+                                             domain=curr_domain,
+                                             category=curr_l1,
+                                             topic=curr_l2,
+                                             keywords=curr_l3,
+                                             api_key=resolved_key,
+                                             model="gemini-2.5-flash",
+                                         )
+                                         if 'demo_data' in st.session_state and not st.session_state.demo_data.empty:
+                                             df_up = st.session_state.demo_data.copy()
+                                             for r_i, r_val in df_up.iterrows():
+                                                 l3_val = r_val.get('level3', '')
+                                                 match_found = False
+                                                 if isinstance(l3_val, list) and curr_l3 in l3_val:
+                                                      match_found = True
+                                                 elif str(l3_val) == str(curr_l3) or curr_l3 in str(l3_val):
+                                                      match_found = True
+                                                 if match_found and str(r_val.get('level1', '')) == str(curr_l1) and str(r_val.get('level2', '')) == str(curr_l2):
+                                                      df_up.at[r_i, 'paper_urls'] = res_ground['paper_urls']
+                                                      df_up.at[r_i, 'paper_titles'] = res_ground['paper_titles']
+                                                      df_up.at[r_i, 'url'] = res_ground['url']
+                                                      df_up.at[r_i, 'paper_content'] = res_ground['paper_content']
+                                             st.session_state.demo_data = df_up
+                                             st.rerun()
+                                     except Exception:
+                                         pass
+
+                         # Pick first Google search URL directly and display link, or "Could not find"
+                         if paper_urls and paper_urls[0]:
+                             first_url = paper_urls[0]
+                             first_title = paper_titles[0] if (paper_titles and paper_titles[0] and paper_titles[0] != "Could not find") else "Published Research Paper"
+                             st.markdown(f"- 📄 [**{first_title}**]({first_url})")
+                         else:
+                             not_found_title = paper_titles[0] if (paper_titles and paper_titles[0]) else "Could not find"
+                             st.markdown(f"- 📄 *{not_found_title}*")
+
+                         if paper_content and paper_content not in ["Could not find", "None", ""]:
                              with st.expander("📑 Grounded Paper Context & Demographics", expanded=False):
                                  st.markdown(f"<div style='font-size:0.85rem; color:#475569; white-space:pre-wrap;'>{paper_content}</div>", unsafe_allow_html=True)
-
-                         # Interactive Grounding Button
-                         st.markdown("<div style='margin-top: 12px;'>", unsafe_allow_html=True)
-                         col_ground_btn, _ = st.columns([1.8, 1])
-                         with col_ground_btn:
-                             l1_tag = str(node_data.get('level1', 'L1')).replace(' ', '_')
-                             l2_tag = str(node_data.get('level2', 'L2')).replace(' ', '_')
-                             l3_tag = str(st.session_state.selected_l3).replace(' ', '_')
-                             btn_key = f"ground_btn_{l1_tag}_{l2_tag}_{l3_tag}"
-                             if st.button("🔍 Ground Node with Google Search", key=btn_key, use_container_width=True):
-                                 resolved_key = (
-                                     st.session_state.get("gemini_api_key")
-                                     or os.environ.get("GEMINI_API_KEY")
-                                     or os.environ.get("GOOGLE_API_KEY")
-                                 )
-                                 if not resolved_key:
-                                     st.error("⚠️ Please provide a Gemini API Key in the Concept step to ground with Google Search.")
-                                 else:
-                                     with st.spinner("Searching for published research papers via Google Search grounding..."):
-                                         try:
-                                             curr_l1 = node_data.get('level1', 'General')
-                                             curr_l2 = node_data.get('level2', 'General')
-                                             curr_l3 = st.session_state.selected_l3
-                                             curr_domain = node_data.get('Domain', st.session_state.get('saved_concept', 'Domain'))
-                                             res_ground = fetch_citation_for_node(
-                                                 domain=curr_domain,
-                                                 category=curr_l1,
-                                                 topic=curr_l2,
-                                                 keywords=curr_l3,
-                                                 api_key=resolved_key,
-                                                 model="gemini-2.5-flash",
-                                             )
-                                             if 'demo_data' in st.session_state and not st.session_state.demo_data.empty:
-                                                 df_up = st.session_state.demo_data.copy()
-                                                 for r_i, r_val in df_up.iterrows():
-                                                     l3_val = r_val.get('level3', '')
-                                                     match_found = False
-                                                     if isinstance(l3_val, list) and curr_l3 in l3_val:
-                                                          match_found = True
-                                                     elif str(l3_val) == str(curr_l3) or curr_l3 in str(l3_val):
-                                                          match_found = True
-                                                     if match_found and str(r_val.get('level1', '')) == str(curr_l1) and str(r_val.get('level2', '')) == str(curr_l2):
-                                                          df_up.at[r_i, 'paper_urls'] = res_ground['paper_urls']
-                                                          df_up.at[r_i, 'paper_titles'] = res_ground['paper_titles']
-                                                          df_up.at[r_i, 'url'] = res_ground['url']
-                                                          df_up.at[r_i, 'paper_content'] = res_ground['paper_content']
-                                                 st.session_state.demo_data = df_up
-                                                 st.success(f"✅ Successfully grounded '{curr_l3}' with published research papers!")
-                                                 st.rerun()
-                                         except Exception as exc:
-                                             st.error(f"Search grounding error: {str(exc)}")
-                         st.markdown("</div>", unsafe_allow_html=True)
                      else:
                          st.warning("Data not found for this node.")
             st.markdown('</div>', unsafe_allow_html=True)

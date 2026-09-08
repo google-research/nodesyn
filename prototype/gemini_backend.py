@@ -624,29 +624,31 @@ class CredibleSourceGenerator:
             elif extracted_title not in paper_titles:
                 paper_titles.insert(0, extracted_title)
 
-        # 3. Fallback if search grounding did not return web links
-        if not paper_urls:
-            encoded_query = urllib.parse.quote_plus(f"{domain} {topic} {keywords_str} research paper")
-            fallback_scholar = f"https://scholar.google.com/scholar?q={encoded_query}"
-            paper_urls.append(fallback_scholar)
-
-        if not paper_titles:
-            paper_titles.append(
-                extracted_title or f"Research on {topic} ({keywords_str})"
+        if paper_urls:
+            # Pick first Google search URL directly and save the link
+            first_url = paper_urls[0]
+            first_title = paper_titles[0] if paper_titles else (extracted_title or "Published Research Paper")
+            paper_urls = [first_url]
+            paper_titles = [first_title]
+            display_title = first_title
+            url_val = [first_url]
+            paper_content = (
+                f"Title: {display_title} ;\n"
+                f"Occupation: {extracted_occ or 'N/A'} ;\n"
+                f"Demographics: {extracted_demo or 'N/A'} ;\n"
+                f"Country: {extracted_country or 'N/A'}"
             )
-
-        display_title = paper_titles[0] if paper_titles else (extracted_title or f"{topic} Research")
-        paper_content = (
-            f"Title: {display_title} ;\n"
-            f"Occupation: {extracted_occ or 'Specialists & Practitioners'} ;\n"
-            f"Demographics: {extracted_demo or 'General Population'} ;\n"
-            f"Country: {extracted_country or 'Global'}"
-        )
+        else:
+            # If no research paper is returned by google search, set title to "Could not find"
+            paper_urls = []
+            paper_titles = ["Could not find"]
+            url_val = []
+            paper_content = "Could not find"
 
         return {
             "paper_urls": paper_urls,
             "paper_titles": paper_titles,
-            "url": paper_urls,
+            "url": url_val,
             "paper_content": paper_content,
         }
 
@@ -756,16 +758,11 @@ class CredibleSourceGenerator:
         for idx in row_indices:
             data = parsed_by_idx.get(idx)
             if not data:
-                row = df_out.loc[idx]
-                kw = row.get("level3", row.get("keywords", ""))
-                kw_str = ", ".join(kw) if isinstance(kw, list) else str(kw)
-                encoded_q = urllib.parse.quote_plus(f"{domain} {row.get('level2', '')} {kw_str} research paper")
-                fallback_url = f"https://scholar.google.com/scholar?q={encoded_q}"
                 data = {
-                    "paper_urls": [fallback_url],
-                    "paper_titles": [f"Research on {row.get('level2', '')} ({kw_str})"],
-                    "url": [fallback_url],
-                    "paper_content": f"Title: Research on {row.get('level2', '')} ;\nOccupation: Specialists ;\nDemographics: General ;\nCountry: Global",
+                    "paper_urls": [],
+                    "paper_titles": ["Could not find"],
+                    "url": [],
+                    "paper_content": "Could not find",
                 }
             paper_urls_col.append(data["paper_urls"])
             paper_titles_col.append(data["paper_titles"])
@@ -899,11 +896,11 @@ def generate_dynamic_taxonomy(
             max_workers=10,
         )
     except Exception as e:
-        logging.warning("Google search grounding step encountered error: %s. Using default fallback citations.", str(e))
+        logging.warning("Google search grounding step encountered error: %s. Setting citations to Could not find.", str(e))
         final_df["paper_urls"] = [[] for _ in range(len(final_df))]
-        final_df["paper_titles"] = [[] for _ in range(len(final_df))]
+        final_df["paper_titles"] = [["Could not find"] for _ in range(len(final_df))]
         final_df["url"] = [[] for _ in range(len(final_df))]
-        final_df["paper_content"] = ["" for _ in range(len(final_df))]
+        final_df["paper_content"] = ["Could not find" for _ in range(len(final_df))]
 
     # Format standard attributes
     final_df["user_case"] = use_case
