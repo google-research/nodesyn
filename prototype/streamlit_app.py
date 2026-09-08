@@ -1243,7 +1243,7 @@ elif st.session_state.step == "Taxonomy":
                                              topic=curr_l2,
                                              keywords=curr_l3,
                                              api_key=resolved_key,
-                                             model="gemini-2.5-flash",
+                                             model="gemini-2.5-flash-lite",
                                          )
                                          if 'demo_data' in st.session_state and not st.session_state.demo_data.empty:
                                              df_up = st.session_state.demo_data.copy()

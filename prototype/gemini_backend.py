@@ -561,15 +561,16 @@ class CredibleSourceGenerator:
         You are a research librarian specializing in {domain} research with a focus on {category}.
         Your task is to provide 1 published research paper directly related to {domain}, specifically {topic} within the context of {keywords_str}.
         
-        For the paper, extract a concise title, occupation, demographics, and country that are directly coming from the paper full text. Based on the paper content, please extract what are the sensitive group of people (such as occupation or demographic or country) that are being evaluated or affected in this research paper.
+        For the paper, extract a concise title, occupation, demographics, country, and the direct URL or Google Search link. Based on the paper content, please extract what are the sensitive group of people (such as occupation or demographic or country) that are being evaluated or affected in this research paper.
         
         Ensure this paper is reputable and accurately reflects its published content. The output should be formatted as:
         Title: <exact paper title> ;
         Occupation: <occupation(s)> ;
         Demographics: <demographic group(s)> ;
         Country: <country/region> ;
+        URL: <direct paper link or search URL> ;
         
-        Please strictly follow this format, ONLY return these four items (Title, Occupation, Demographics, Country), keep words short and precise, and do not add rationale.
+        Please strictly follow this format, ONLY return these five items (Title, Occupation, Demographics, Country, URL), keep words short and precise, and do not add rationale.
         """)
         return prompt
 
@@ -586,7 +587,7 @@ class CredibleSourceGenerator:
         full_response = result.full_response
         content = result.generated_content.strip()
 
-        # 1. Grounding Metadata from Google Search
+        # 1. Grounding Metadata from Google Search chunks
         if full_response and hasattr(full_response, "candidates") and full_response.candidates:
             cand = full_response.candidates[0]
             grounding_metadata = getattr(cand, "grounding_metadata", None)
@@ -603,20 +604,40 @@ class CredibleSourceGenerator:
                             paper_titles.append(title)
 
         # 2. Parse text content
-        title_match = re.search(r'Title:\s*([^;\n]+)', content, re.IGNORECASE)
-        occ_match = re.search(r'Occupation:\s*([^;\n]+)', content, re.IGNORECASE)
-        demo_match = re.search(r'Demographics:\s*([^;\n]+)', content, re.IGNORECASE)
-        country_match = re.search(r'Country:\s*([^;\n]+)', content, re.IGNORECASE)
+        t_m = re.search(r'(?:\*{0,2}Title\*{0,2}:|\*{0,2}Title:\*{0,2})\s*([^\n;]+)', content, re.IGNORECASE)
+        occ_match = re.search(r'(?:\*{0,2}Occupation\*{0,2}:|\*{0,2}Occupation:\*{0,2})\s*([^\n;]+)', content, re.IGNORECASE)
+        demo_match = re.search(r'(?:\*{0,2}Demographics\*{0,2}:|\*{0,2}Demographics:\*{0,2})\s*([^\n;]+)', content, re.IGNORECASE)
+        country_match = re.search(r'(?:\*{0,2}Country\*{0,2}:|\*{0,2}Country:\*{0,2})\s*([^\n;]+)', content, re.IGNORECASE)
 
-        extracted_title = title_match.group(1).strip(" *\"'") if title_match else ""
-        extracted_occ = occ_match.group(1).strip(" *\"'") if occ_match else ""
-        extracted_demo = demo_match.group(1).strip(" *\"'") if demo_match else ""
-        extracted_country = country_match.group(1).strip(" *\"'") if country_match else ""
+        extracted_title = re.sub(r'[*"\'`]', '', t_m.group(1)).strip() if t_m else ""
+        extracted_occ = re.sub(r'[*"\'`]', '', occ_match.group(1)).strip() if occ_match else ""
+        extracted_demo = re.sub(r'[*"\'`]', '', demo_match.group(1)).strip() if demo_match else ""
+        extracted_country = re.sub(r'[*"\'`]', '', country_match.group(1)).strip() if country_match else ""
 
-        # Extract any raw URLs in the text
-        for u in re.findall(r'https?://[^\s<>"\')]+', content):
+        # Extract URL field from text
+        u_m = re.search(r'(?:URL|Link)[*:\s]+(https?://[^\s<>"\'\);]+)', content, re.IGNORECASE)
+        if u_m:
+            u_val = u_m.group(1).strip()
+            if u_val not in paper_urls:
+                paper_urls.append(u_val)
+
+        # Extract any in-text URLs
+        for u in re.findall(r'https?://[^\s<>"\'\);]+', content):
             if u not in paper_urls:
                 paper_urls.append(u)
+
+        # 3. Grounding Metadata from search_entry_point chips
+        if full_response and hasattr(full_response, "candidates") and full_response.candidates:
+            cand = full_response.candidates[0]
+            grounding_metadata = getattr(cand, "grounding_metadata", None)
+            if grounding_metadata and getattr(grounding_metadata, "search_entry_point", None):
+                html = grounding_metadata.search_entry_point.rendered_content or ""
+                chips = re.findall(r'<a[^>]+href=[\'"]([^\'"]+)[\'"][^>]*>([^<]+)</a>', html)
+                for chip_url, chip_label in chips:
+                    if chip_url not in paper_urls:
+                        paper_urls.append(chip_url)
+                    if chip_label and chip_label not in paper_titles:
+                        paper_titles.append(chip_label)
 
         if extracted_title:
             if not paper_titles:
@@ -658,7 +679,7 @@ class CredibleSourceGenerator:
         category: str,
         topic: str,
         keywords: str | list[str],
-        model: str = "gemini-2.5-flash",
+        model: str = "gemini-2.5-flash-lite",
     ) -> dict[str, Any]:
         """Fetches research paper citations for a single taxonomy node using Google Search grounding."""
         prompt = self._generate_prompt(domain, category, topic, keywords)
@@ -686,7 +707,7 @@ class CredibleSourceGenerator:
         self,
         taxonomy_df: pd.DataFrame,
         domain: str,
-        model: str = "gemini-2.5-flash",
+        model: str = "gemini-2.5-flash-lite",
         max_workers: int = 10,
     ) -> pd.DataFrame:
         """Grounds all rows in taxonomy_df with credible research papers using Google Search."""
@@ -781,7 +802,7 @@ def generate_credible_sources(
     taxonomy_df: pd.DataFrame,
     domain: str,
     api_key: str | None = None,
-    model: str = "gemini-2.5-flash",
+    model: str = "gemini-2.5-flash-lite",
     max_workers: int = 10,
 ) -> pd.DataFrame:
     """Grounds taxonomy branches with credible research papers using Google Search."""
@@ -801,7 +822,7 @@ def fetch_citation_for_node(
     topic: str,
     keywords: str | list[str],
     api_key: str | None = None,
-    model: str = "gemini-2.5-flash",
+    model: str = "gemini-2.5-flash-lite",
 ) -> dict[str, Any]:
     """Fetches research paper citations for a single node via Google Search grounding."""
     client = GeminiUtils(api_key=api_key)
@@ -892,7 +913,7 @@ def generate_dynamic_taxonomy(
         final_df = credible_gen.generate(
             taxonomy_df=final_df,
             domain=domain,
-            model="gemini-2.5-flash",
+            model="gemini-2.5-flash-lite",
             max_workers=10,
         )
     except Exception as e:
