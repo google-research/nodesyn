@@ -11,7 +11,10 @@ from collections import Counter
 import time
 import json
 import textwrap
+import importlib
 from d3_sankey import create_d3_sankey_html
+import gemini_backend
+importlib.reload(gemini_backend)
 from gemini_backend import (
     generate_dynamic_taxonomy,
     generate_dynamic_prompts,
