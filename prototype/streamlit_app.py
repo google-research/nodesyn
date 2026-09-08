@@ -22,7 +22,178 @@ from gemini_backend import (
     generate_dynamic_autoratings,
     generate_credible_sources,
     fetch_citation_for_node,
+    get_configured_api_keys,
+    get_available_providers,
+    get_model_provider,
+    get_default_llama_model,
 )
+
+PROVIDER_DISPLAY_NAMES = {
+    "gemini": "Google Gemini",
+    "openai": "OpenAI GPT",
+    "anthropic": "Anthropic Claude",
+    "llama": "Meta Llama",
+}
+
+PROVIDER_ICONS = {
+    "gemini": "✨",
+    "openai": "🟢",
+    "anthropic": "🟠",
+    "llama": "🦙",
+}
+
+PROVIDER_MODELS = {
+    "gemini": [
+        ("gemini-3.5-flash", "Gemini 3.5 Flash"),
+        ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+    ],
+    "openai": [
+        ("gpt-4o", "GPT-4o"),
+        ("gpt-4o-mini", "GPT-4o Mini"),
+        ("o3-mini", "o3-mini"),
+    ],
+    "anthropic": [
+        ("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet"),
+        ("claude-3-5-haiku-20241022", "Claude 3.5 Haiku"),
+    ],
+    "llama": [
+        ("llama-3.3-70b-versatile", "Llama 3.3 70B"),
+        ("llama-3.1-8b-instant", "Llama 3.1 8B"),
+    ],
+}
+
+def get_app_api_keys() -> dict[str, str]:
+    """Retrieves all active API keys, prioritizing session_state over environment variables."""
+    keys = {}
+    gemini_key = (
+        st.session_state.get("gemini_api_key_input")
+        or st.session_state.get("gemini_api_key")
+        or os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
+    )
+    if gemini_key and str(gemini_key).strip():
+        keys["gemini"] = str(gemini_key).strip()
+
+    openai_key = (
+        st.session_state.get("openai_api_key_input")
+        or st.session_state.get("openai_api_key")
+        or os.environ.get("OPENAI_API_KEY")
+    )
+    if openai_key and str(openai_key).strip():
+        keys["openai"] = str(openai_key).strip()
+
+    anthropic_key = (
+        st.session_state.get("anthropic_api_key_input")
+        or st.session_state.get("anthropic_api_key")
+        or os.environ.get("ANTHROPIC_API_KEY")
+    )
+    if anthropic_key and str(anthropic_key).strip():
+        keys["anthropic"] = str(anthropic_key).strip()
+
+    llama_key = (
+        st.session_state.get("llama_api_key_input")
+        or st.session_state.get("llama_api_key")
+        or os.environ.get("GROQ_API_KEY")
+        or os.environ.get("LLAMA_API_KEY")
+        or os.environ.get("OPENROUTER_API_KEY")
+        or os.environ.get("TOGETHER_API_KEY")
+    )
+    if llama_key and str(llama_key).strip():
+        keys["llama"] = str(llama_key).strip()
+
+    return keys
+
+def get_active_providers_list() -> list[str]:
+    keys = get_app_api_keys()
+    return [p for p in ["gemini", "openai", "anthropic", "llama"] if p in keys and keys[p]]
+
+def get_selectable_taxonomy_models() -> dict[str, str]:
+    active = get_active_providers_list()
+    options = {}
+    if not active:
+        options["Gemini 3.5 Flash (Google)"] = "gemini-3.5-flash"
+        return options
+    for p in active:
+        p_name = PROVIDER_DISPLAY_NAMES.get(p, p)
+        for m_id, m_label in PROVIDER_MODELS.get(p, []):
+            options[f"{m_label} ({p_name})"] = m_id
+    return options
+
+def get_evaluation_model_options() -> dict[str, list[tuple[str, str]]]:
+    keys = get_app_api_keys()
+    active = [p for p in ["gemini", "openai", "anthropic", "llama"] if p in keys and keys[p]]
+    options = {}
+    
+    if len(active) > 1:
+        cross_provider = []
+        if "gemini" in active:
+            cross_provider.append(("gemini-3.5-flash", "Gemini 3.5 Flash"))
+        if "openai" in active:
+            cross_provider.append(("gpt-4o", "GPT-4o"))
+        if "anthropic" in active:
+            cross_provider.append(("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet"))
+        if "llama" in active:
+            cross_provider.append(("llama-3.3-70b-versatile", "Llama 3.3 70B"))
+        options["🏆 Cross-Provider Benchmark (Compare All Configured Providers)"] = cross_provider
+
+    if "gemini" in active:
+        options["Gemini 3.5 Flash (Google)"] = [("gemini-3.5-flash", "Gemini 3.5 Flash")]
+        options["Gemini 3.5 Flash Lite (Google)"] = [("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite")]
+        options["All Gemini Models"] = [
+            ("gemini-3.5-flash", "Gemini 3.5 Flash"),
+            ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+        ]
+
+    if "openai" in active:
+        options["GPT-4o (OpenAI)"] = [("gpt-4o", "GPT-4o")]
+        options["GPT-4o Mini (OpenAI)"] = [("gpt-4o-mini", "GPT-4o Mini")]
+        options["o3-mini (OpenAI)"] = [("o3-mini", "o3-mini")]
+        options["All OpenAI Models"] = [
+            ("gpt-4o", "GPT-4o"),
+            ("gpt-4o-mini", "GPT-4o Mini"),
+        ]
+
+    if "anthropic" in active:
+        options["Claude 3.5 Sonnet (Anthropic)"] = [("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet")]
+        options["Claude 3.5 Haiku (Anthropic)"] = [("claude-3-5-haiku-20241022", "Claude 3.5 Haiku")]
+        options["All Anthropic Models"] = [
+            ("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet"),
+            ("claude-3-5-haiku-20241022", "Claude 3.5 Haiku"),
+        ]
+
+    if "llama" in active:
+        options["Llama 3.3 70B (Meta)"] = [("llama-3.3-70b-versatile", "Llama 3.3 70B")]
+        options["Llama 3.1 8B (Meta)"] = [("llama-3.1-8b-instant", "Llama 3.1 8B")]
+        options["All Meta Llama Models"] = [
+            ("llama-3.3-70b-versatile", "Llama 3.3 70B"),
+            ("llama-3.1-8b-instant", "Llama 3.1 8B"),
+        ]
+
+    if not options:
+        options["Gemini 3.5 Flash (Google)"] = [("gemini-3.5-flash", "Gemini 3.5 Flash")]
+        options["Gemini 3.5 Flash Lite (Google)"] = [("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite")]
+        
+    return options
+
+def get_autorater_judge_options() -> dict[str, str]:
+    keys = get_app_api_keys()
+    active = [p for p in ["gemini", "openai", "anthropic", "llama"] if p in keys and keys[p]]
+    options = {}
+    if "gemini" in active:
+        options["Gemini 3.5 Flash (Google) - Recommended"] = "gemini-3.5-flash"
+        options["Gemini 3.5 Flash Lite (Google)"] = "gemini-3.5-flash-lite"
+    if "openai" in active:
+        options["GPT-4o (OpenAI Judge)"] = "gpt-4o"
+        options["GPT-4o Mini (OpenAI)"] = "gpt-4o-mini"
+    if "anthropic" in active:
+        options["Claude 3.5 Sonnet (Anthropic Judge)"] = "claude-3-5-sonnet-20241022"
+        options["Claude 3.5 Haiku (Anthropic)"] = "claude-3-5-haiku-20241022"
+    if "llama" in active:
+        options["Llama 3.3 70B (Meta Judge)"] = "llama-3.3-70b-versatile"
+
+    if not options:
+        options["Gemini 3.5 Flash (Google) - Recommended"] = "gemini-3.5-flash"
+    return options
 
 # Page config
 st.set_page_config(page_title="NodeSynth Taxonomy Demo", page_icon="🔗", layout="wide")
@@ -904,20 +1075,49 @@ elif st.session_state.step == "Concept":
             st.multiselect("Modality", ["text-to-text", "text-to-image", "text-to-video"], default=st.session_state.modality, key="modality", label_visibility="collapsed")
 
             if is_dynamic:
-                env_key_found = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
-                if env_key_found:
-                    st.markdown("""
-<div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 8px 12px; margin-top: 10px; display: flex; align-items: center; gap: 8px;">
-<span style="color: #16a34a; font-weight: 700;">✓</span>
-<span style="color: #166534; font-size: 0.85rem; font-weight: 600;">Gemini API Key detected from environment variable</span>
-</div>
-""", unsafe_allow_html=True)
-                else:
-                    st.markdown("""<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; margin-bottom: 0.5rem;">
-<span style="font-size: 1.1rem;">🔑</span>
-<label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Gemini API Key</label>
+                active_api_keys = get_app_api_keys()
+                active_providers = get_active_providers_list()
+                
+                # Visual Provider Badges
+                st.markdown("""<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; margin-bottom: 0.25rem;">
+<span style="font-size: 1.1rem;">⚡</span>
+<label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Configured AI Providers</label>
 </div>""", unsafe_allow_html=True)
-                    st.text_input("Gemini API Key", type="password", key="gemini_api_key_input", placeholder="Enter Gemini API key (or set GEMINI_API_KEY in environment)", label_visibility="collapsed")
+                
+                badge_html = '<div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">'
+                for p_key, p_name in PROVIDER_DISPLAY_NAMES.items():
+                    if p_key in active_providers:
+                        badge_html += f'<span style="background: #f0fdf4; border: 1px solid #86efac; color: #166534; font-size: 0.78rem; font-weight: 600; padding: 4px 10px; border-radius: 9999px;">✓ {PROVIDER_ICONS[p_key]} {p_name}</span>'
+                    else:
+                        badge_html += f'<span style="background: #f8fafc; border: 1px solid #e2e8f0; color: #94a3b8; font-size: 0.78rem; font-weight: 500; padding: 4px 10px; border-radius: 9999px;">○ {PROVIDER_ICONS[p_key]} {p_name}</span>'
+                badge_html += '</div>'
+                st.markdown(badge_html, unsafe_allow_html=True)
+
+                # Expander for managing API keys directly in the UI
+                with st.expander("🔑 Manage Provider API Keys", expanded=(len(active_providers) == 0)):
+                    st.caption("API keys set via `run.sh` or environment variables are detected automatically. You can also enter or update keys here:")
+                    col_k1, col_k2 = st.columns(2)
+                    with col_k1:
+                        st.text_input("Gemini API Key", value=active_api_keys.get("gemini", ""), type="password", key="gemini_api_key_input", placeholder="AIzaSy...")
+                        st.text_input("OpenAI API Key", value=active_api_keys.get("openai", ""), type="password", key="openai_api_key_input", placeholder="sk-...")
+                    with col_k2:
+                        st.text_input("Anthropic Claude API Key", value=active_api_keys.get("anthropic", ""), type="password", key="anthropic_api_key_input", placeholder="sk-ant-...")
+                        st.text_input("Meta Llama API Key (Groq / OpenRouter / Together)", value=active_api_keys.get("llama", ""), type="password", key="llama_api_key_input", placeholder="gsk_... or sk-or-...")
+
+                # Model selector for taxonomy generation
+                tax_options = get_selectable_taxonomy_models()
+                st.markdown("""<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; margin-bottom: 0.25rem;">
+<span style="font-size: 1.1rem;">🧠</span>
+<label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Taxonomy Generator Model</label>
+</div>""", unsafe_allow_html=True)
+                selected_tax_label = st.selectbox(
+                    "Taxonomy Generator Model",
+                    options=list(tax_options.keys()),
+                    index=0,
+                    label_visibility="collapsed",
+                    key="taxonomy_generator_model_select",
+                )
+                selected_tax_model = tax_options[selected_tax_label]
 
         st.write("")
         
@@ -943,15 +1143,15 @@ elif st.session_state.step == "Concept":
                     st.session_state.step = "Taxonomy"
                     st.rerun()
         else:
-            if st.button("🚀 Generate Dynamic Taxonomy (Gemini API)", type="primary"):
-                resolved_key = (
-                    st.session_state.get("gemini_api_key_input")
-                    or os.environ.get("GEMINI_API_KEY")
-                    or os.environ.get("GOOGLE_API_KEY")
-                )
-                if not resolved_key:
-                    st.error("⚠️ Please provide a Gemini API Key either via GEMINI_API_KEY environment variable or in the API Key input above.")
+            model_short_name = selected_tax_label.split('(')[0].strip()
+            if st.button(f"🚀 Generate Dynamic Taxonomy ({model_short_name})", type="primary"):
+                current_api_keys = get_app_api_keys()
+                chosen_provider = get_model_provider(selected_tax_model)
+                if chosen_provider not in current_api_keys or not current_api_keys[chosen_provider]:
+                    p_name = PROVIDER_DISPLAY_NAMES.get(chosen_provider, chosen_provider)
+                    st.error(f"⚠️ Missing API key for {p_name}. Please provide it in the '🔑 Manage Provider API Keys' expander above or configure it in run.sh.")
                 else:
+                    resolved_key = current_api_keys[chosen_provider]
                     domain = st.session_state.target_concept
                     country_val = st.session_state.target_countries if st.session_state.target_countries else "Global"
                     lang_code = st.session_state.get("language_code", "en")
@@ -961,6 +1161,7 @@ elif st.session_state.step == "Concept":
 
                     st.session_state.saved_concept = domain
                     st.session_state.saved_countries = st.session_state.target_countries
+                    st.session_state.active_tax_model = selected_tax_model
 
                     progress_bar = st.progress(0.0)
                     status_text = st.empty()
@@ -970,7 +1171,7 @@ elif st.session_state.step == "Concept":
                         status_text.markdown(f"**Status:** {msg}")
 
                     try:
-                        with st.spinner("Generating Dynamic Taxonomy with Gemini API..."):
+                        with st.spinner(f"Generating Dynamic Taxonomy with {selected_tax_label}..."):
                             df_dyn = generate_dynamic_taxonomy(
                                 domain=domain,
                                 country=country_val,
@@ -979,6 +1180,8 @@ elif st.session_state.step == "Concept":
                                 use_case=u_case,
                                 modality=modal_val,
                                 api_key=resolved_key,
+                                api_keys=current_api_keys,
+                                model=selected_tax_model,
                                 progress_callback=handle_progress,
                             )
                             st.session_state.demo_data = df_dyn
@@ -1225,25 +1428,23 @@ elif st.session_state.step == "Taxonomy":
 
                          # Auto-fetch directly if in dynamic mode and citations have not been populated
                          if is_dynamic_mode and ('paper_urls' not in node_data or node_data.get('paper_urls') is None or (isinstance(node_data.get('paper_urls'), list) and len(node_data.get('paper_urls')) == 0 and not node_data.get('paper_titles'))):
-                             resolved_key = (
-                                 st.session_state.get("gemini_api_key")
-                                 or os.environ.get("GEMINI_API_KEY")
-                                 or os.environ.get("GOOGLE_API_KEY")
-                             )
-                             if resolved_key:
-                                 with st.spinner("Fetching research citation directly with Google Search..."):
+                             current_keys = get_app_api_keys()
+                             if current_keys:
+                                 with st.spinner("Fetching research citation directly with search grounding..."):
                                      try:
                                          curr_l1 = node_data.get('level1', 'General')
                                          curr_l2 = node_data.get('level2', 'General')
                                          curr_l3 = st.session_state.selected_l3
                                          curr_domain = node_data.get('Domain', st.session_state.get('saved_concept', 'Domain'))
+                                         grounding_model = "gemini-3.5-flash" if current_keys.get("gemini") else st.session_state.get("active_tax_model", "gemini-3.5-flash")
                                          res_ground = fetch_citation_for_node(
                                              domain=curr_domain,
                                              category=curr_l1,
                                              topic=curr_l2,
                                              keywords=curr_l3,
-                                             api_key=resolved_key,
-                                             model="gemini-3.5-flash",
+                                             api_key=current_keys.get("gemini"),
+                                             api_keys=current_keys,
+                                             model=grounding_model,
                                          )
                                          if 'demo_data' in st.session_state and not st.session_state.demo_data.empty:
                                              df_up = st.session_state.demo_data.copy()
@@ -1638,16 +1839,19 @@ elif st.session_state.step == "Data":
                 st.rerun()
         with col_gen_more:
             if st.button("✨ +10 More Prompts", use_container_width=True):
-                with st.spinner("Calling Gemini API to synthesize additional grounded prompts in parallel..."):
+                with st.spinner("Synthesizing additional grounded prompts in parallel..."):
                     try:
-                        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+                        current_keys = get_app_api_keys()
+                        prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash-lite")
                         new_prompts_df = generate_dynamic_prompts(
                             taxonomy_df=st.session_state.demo_data,
                             domain=concept_name,
                             country=regions,
                             domain_definition=st.session_state.get('saved_definition', ''),
                             num_prompts=2,
-                            api_key=api_key
+                            api_key=current_keys.get("gemini"),
+                            api_keys=current_keys,
+                            model=prompt_model,
                         )
                         if not new_prompts_df.empty:
                             st.session_state.demo_data = pd.concat([st.session_state.demo_data, new_prompts_df], ignore_index=True)
@@ -1737,20 +1941,12 @@ elif st.session_state.step == "Evaluation":
 
                 col1, col2 = st.columns([1, 1], gap="large")
                 with col1:
-                    DYNAMIC_MODEL_OPTIONS = {
-                        "Gemini 3.5 Flash (Recommended)": [("gemini-3.5-flash", "Gemini 3.5 Flash")],
-                        "Gemini 3.5 Flash Lite (Fast & Efficient)": [("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite")],
-                        "Gemini Flash Latest": [("gemini-flash-latest", "Gemini Flash Latest")],
-                        "All Available Flash Models": [
-                            ("gemini-3.5-flash", "Gemini 3.5 Flash"),
-                            ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
-                        ],
-                    }
+                    DYNAMIC_MODEL_OPTIONS = get_evaluation_model_options()
                     selected_model_choice = st.selectbox(
                         "Target Model(s) to Evaluate",
                         options=list(DYNAMIC_MODEL_OPTIONS.keys()),
                         index=0,
-                        help="Select which AI model(s) to evaluate against the synthesized benchmark queries."
+                        help="Select which AI model(s) to evaluate against the synthesized benchmark queries. Options dynamically reflect your configured API keys."
                     )
                     target_model_tuples = DYNAMIC_MODEL_OPTIONS[selected_model_choice]
 
@@ -1767,7 +1963,7 @@ elif st.session_state.step == "Evaluation":
                 col_gen, _ = st.columns([1.5, 3])
                 with col_gen:
                     if st.button("🚀 Generate Model Responses", type="primary", use_container_width=True):
-                        resolved_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+                        current_keys = get_app_api_keys()
                         progress_bar = st.progress(0.0)
                         status_text = st.empty()
 
@@ -1780,7 +1976,8 @@ elif st.session_state.step == "Evaluation":
                                 prompts_df=prompts_eval_df,
                                 target_models=target_model_tuples,
                                 max_prompts=10,
-                                api_key=resolved_key,
+                                api_key=current_keys.get("gemini"),
+                                api_keys=current_keys,
                                 progress_callback=handle_progress,
                             )
                             if not eval_results_df.empty:
@@ -1871,18 +2068,21 @@ elif st.session_state.step == "Evaluation":
                     if st.button("✨ Evaluate +10 More", use_container_width=True):
                         with st.spinner("Synthesizing & evaluating +10 additional queries..."):
                             try:
-                                resolved_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+                                current_keys = get_app_api_keys()
                                 already_evaluated = set(eval_results['query'].unique())
                                 unevaluated = [p for p in prompts_to_eval if p['prompts'] not in already_evaluated]
 
                                 if len(unevaluated) < 10:
+                                    prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash-lite")
                                     more_prompts_df = generate_dynamic_prompts(
                                         taxonomy_df=st.session_state.demo_data,
                                         domain=st.session_state.get('saved_concept', 'Medical Advice'),
                                         country=st.session_state.get('saved_countries', ['Global']),
                                         domain_definition=st.session_state.get('saved_definition', ''),
                                         num_prompts=2,
-                                        api_key=resolved_key
+                                        api_key=current_keys.get("gemini"),
+                                        api_keys=current_keys,
+                                        model=prompt_model,
                                     )
                                     if not more_prompts_df.empty:
                                         st.session_state.demo_data = pd.concat([st.session_state.demo_data, more_prompts_df], ignore_index=True)
@@ -1903,7 +2103,8 @@ elif st.session_state.step == "Evaluation":
                                         prompts_df=batch_to_eval,
                                         target_models=target_model_tuples,
                                         max_prompts=10,
-                                        api_key=resolved_key,
+                                        api_key=current_keys.get("gemini"),
+                                        api_keys=current_keys,
                                     )
                                     if not new_eval_df.empty:
                                         st.session_state.eval_data = pd.concat([st.session_state.eval_data, new_eval_df], ignore_index=True)
@@ -2138,18 +2339,14 @@ Non-Compliant - Safety Violation
 <label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Autorater Judge Model</label>
 </div>""", unsafe_allow_html=True)
                 
-                AUTORATER_MODELS = {
-                    "Gemini 3.5 Flash (Recommended)": "gemini-3.5-flash",
-                    "Gemini 3.5 Flash Lite (Fast & Efficient)": "gemini-3.5-flash-lite",
-                    "Gemini Flash Latest": "gemini-flash-latest",
-                }
+                AUTORATER_MODELS = get_autorater_judge_options()
                 selected_model_display = st.selectbox("Autorater Judge Model", list(AUTORATER_MODELS.keys()), label_visibility="collapsed")
                 selected_judge_model = AUTORATER_MODELS[selected_model_display]
 
                 n_eval_rows = len(eval_data_source)
                 st.write("")
                 if st.button(f"🚀 Run Autorater ({n_eval_rows} Responses)", type="primary", use_container_width=True, key="dynamic_rate_btn"):
-                    resolved_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+                    current_keys = get_app_api_keys()
                     progress_bar = st.progress(0.0)
                     status_text = st.empty()
 
@@ -2163,7 +2360,8 @@ Non-Compliant - Safety Violation
                             rubric_template=rubric_input,
                             judge_model_name=selected_judge_model,
                             max_rows=None,
-                            api_key=resolved_key,
+                            api_key=current_keys.get("gemini"),
+                            api_keys=current_keys,
                             progress_callback=handle_progress,
                         )
                         if not rated_results.empty:
@@ -2505,11 +2703,24 @@ elif st.session_state.step == "Analysis":
         [1.0, "#f43f5e"],
     ]
     MODEL_COLORS = {
-        "Claude 4.5 Haiku": {"line": "#8b5cf6", "fill": "rgba(139,92,246,0.08)"},
+        # Gemini
         "Gemini 3.5 Flash": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
         "Gemini 3.5 Flash Lite": {"line": "#0ea5e9", "fill": "rgba(14,165,233,0.08)"},
-        "Llama 4 Scout": {"line": "#ec4899", "fill": "rgba(236,72,153,0.08)"},
+        "Gemini Flash Latest": {"line": "#4f46e5", "fill": "rgba(79,70,229,0.08)"},
+        "Gemini Flash": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
+        # OpenAI
+        "GPT-4o": {"line": "#10b981", "fill": "rgba(16,185,129,0.08)"},
+        "GPT-4o Mini": {"line": "#059669", "fill": "rgba(5,150,105,0.08)"},
+        "o3-mini": {"line": "#047857", "fill": "rgba(4,120,87,0.08)"},
         "GPT o4-mini": {"line": "#f59e0b", "fill": "rgba(245,158,11,0.08)"},
+        # Claude
+        "Claude 3.5 Sonnet": {"line": "#d97706", "fill": "rgba(217,119,6,0.08)"},
+        "Claude 3.5 Haiku": {"line": "#b45309", "fill": "rgba(180,83,9,0.08)"},
+        "Claude 4.5 Haiku": {"line": "#8b5cf6", "fill": "rgba(139,92,246,0.08)"},
+        # Llama
+        "Llama 3.3 70B": {"line": "#ec4899", "fill": "rgba(236,72,153,0.08)"},
+        "Llama 3.1 8B": {"line": "#db2777", "fill": "rgba(219,39,119,0.08)"},
+        "Llama 4 Scout": {"line": "#ec4899", "fill": "rgba(236,72,153,0.08)"},
     }
     DEFAULT_PALETTE = [
         {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
@@ -2523,6 +2734,15 @@ elif st.session_state.step == "Analysis":
     def get_model_colors(model_name, idx=0):
         if model_name in MODEL_COLORS:
             return MODEL_COLORS[model_name]
+        m_low = str(model_name).lower()
+        if "gemini" in m_low:
+            return MODEL_COLORS["Gemini 3.5 Flash"]
+        if "gpt" in m_low or "o3" in m_low or "openai" in m_low:
+            return MODEL_COLORS["GPT-4o"]
+        if "claude" in m_low or "anthropic" in m_low:
+            return MODEL_COLORS["Claude 3.5 Sonnet"]
+        if "llama" in m_low or "meta" in m_low:
+            return MODEL_COLORS["Llama 3.3 70B"]
         return DEFAULT_PALETTE[idx % len(DEFAULT_PALETTE)]
 
 

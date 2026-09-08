@@ -15,6 +15,86 @@ from google import genai
 from google.genai import types
 import pandas as pd
 
+try:
+    import openai
+except ImportError:
+    openai = None
+
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+
+
+def get_configured_api_keys() -> dict[str, str]:
+    """Returns a dictionary of currently configured API keys across all supported providers."""
+    keys: dict[str, str] = {}
+    gemini = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if gemini:
+        keys["gemini"] = gemini
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    if openai_key:
+        keys["openai"] = openai_key
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    if anthropic_key:
+        keys["anthropic"] = anthropic_key
+    llama_key = (
+        os.environ.get("GROQ_API_KEY")
+        or os.environ.get("OPENROUTER_API_KEY")
+        or os.environ.get("TOGETHER_API_KEY")
+        or os.environ.get("LLAMA_API_KEY")
+    )
+    if llama_key:
+        keys["llama"] = llama_key
+    return keys
+
+
+def get_available_providers() -> dict[str, bool]:
+    """Returns boolean flags for available providers based on configured API keys."""
+    keys = get_configured_api_keys()
+    return {
+        "gemini": "gemini" in keys and bool(keys["gemini"]),
+        "openai": "openai" in keys and bool(keys["openai"]),
+        "anthropic": "anthropic" in keys and bool(keys["anthropic"]),
+        "llama": "llama" in keys and bool(keys["llama"]),
+    }
+
+
+def get_model_provider(model_name: str) -> str:
+    """Infers the AI provider from the model identifier string."""
+    m = str(model_name).lower().strip()
+    if m.startswith("gemini") or "gemini" in m:
+        return "gemini"
+    if m.startswith(("gpt-", "o1", "o3", "chatgpt")) or "gpt" in m or "o3" in m or "o1" in m:
+        return "openai"
+    if m.startswith("claude") or "claude" in m:
+        return "anthropic"
+    if m.startswith(("llama", "meta-llama")) or "groq" in m or "llama" in m:
+        return "llama"
+    return "gemini"
+
+
+def get_default_llama_model(size: str = "70b") -> str:
+    """Returns default model identifier for the active Llama provider."""
+    provider = os.environ.get("LLAMA_PROVIDER", "").lower()
+    if not provider:
+        if os.environ.get("GROQ_API_KEY"):
+            provider = "groq"
+        elif os.environ.get("OPENROUTER_API_KEY"):
+            provider = "openrouter"
+        elif os.environ.get("TOGETHER_API_KEY"):
+            provider = "together"
+        else:
+            provider = "groq"
+
+    if provider == "openrouter":
+        return "meta-llama/llama-3.3-70b-instruct" if size == "70b" else "meta-llama/llama-3.1-8b-instruct"
+    elif provider == "together":
+        return "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    else:  # groq or custom
+        return "llama-3.3-70b-versatile" if size == "70b" else "llama-3.1-8b-instant"
+
+
 _SAFETY_SETTINGS = [
     types.SafetySetting(
         category="HARM_CATEGORY_HARASSMENT",
@@ -57,18 +137,129 @@ class GenerateContentResult:
         self.full_response = full_response
 
 
-class GeminiUtils:
-    """Util class for interacting with Gemini API with retry and batching support."""
+class MultiModelUtils:
+    """Unified client for interacting with Gemini, OpenAI, Anthropic, and Llama APIs with parallel batching."""
 
-    def __init__(self, api_key: str | None = None):
-        resolved_key = (
-            api_key
-            or os.environ.get("GEMINI_API_KEY")
-            or os.environ.get("GOOGLE_API_KEY")
+    def __init__(
+        self,
+        api_key: str | None = None,
+        api_keys: dict[str, str] | None = None,
+    ):
+        self._api_keys = dict(get_configured_api_keys())
+        if api_keys:
+            self._api_keys.update({k: v for k, v in api_keys.items() if v})
+        if api_key:
+            self._api_keys["gemini"] = api_key
+
+        self._gemini_client = None
+        self._openai_client = None
+        self._anthropic_client = None
+        self._llama_client = None
+
+        if "gemini" in self._api_keys and self._api_keys["gemini"]:
+            self._gemini_client = genai.Client(api_key=self._api_keys["gemini"])
+
+    def get_model_provider(self, model: str) -> str:
+        return get_model_provider(model)
+
+    def _call_gemini(
+        self,
+        prompt: str,
+        model: str,
+        tools: list[Any] | None = None,
+    ) -> tuple[str, Any]:
+        if not self._gemini_client:
+            g_key = self._api_keys.get("gemini") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+            if not g_key:
+                raise ValueError("No Gemini API Key provided. Set GEMINI_API_KEY environment variable or enter it in the UI.")
+            self._gemini_client = genai.Client(api_key=g_key)
+
+        config_kwargs: dict[str, Any] = {
+            "top_p": 0.95,
+            "temperature": 0.1,
+            "safety_settings": _SAFETY_SETTINGS,
+        }
+        if tools:
+            config_kwargs["tools"] = tools
+
+        response = self._gemini_client.models.generate_content(
+            contents=prompt,
+            model=model,
+            config=types.GenerateContentConfig(**config_kwargs),
         )
-        if not resolved_key:
-            raise ValueError("No Gemini API Key provided. Set GEMINI_API_KEY environment variable or enter it in the UI.")
-        self._client = genai.Client(api_key=resolved_key)
+        text = response.text if response and response.text else ""
+        return text, response
+
+    def _call_openai(self, prompt: str, model: str) -> tuple[str, Any]:
+        if openai is None:
+            raise ImportError("openai package is required for OpenAI models. Install via 'pip install openai'.")
+        o_key = self._api_keys.get("openai") or os.environ.get("OPENAI_API_KEY")
+        if not o_key:
+            raise ValueError("No OpenAI API key provided. Set OPENAI_API_KEY environment variable or enter it in the UI.")
+        if not self._openai_client:
+            self._openai_client = openai.OpenAI(api_key=o_key)
+
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if not (model.startswith("o1") or model.startswith("o3")):
+            kwargs["temperature"] = 0.1
+
+        resp = self._openai_client.chat.completions.create(**kwargs)
+        text = resp.choices[0].message.content or ""
+        return text, resp
+
+    def _call_anthropic(self, prompt: str, model: str) -> tuple[str, Any]:
+        if anthropic is None:
+            raise ImportError("anthropic package is required for Claude models. Install via 'pip install anthropic'.")
+        a_key = self._api_keys.get("anthropic") or os.environ.get("ANTHROPIC_API_KEY")
+        if not a_key:
+            raise ValueError("No Anthropic API key provided. Set ANTHROPIC_API_KEY environment variable or enter it in the UI.")
+        if not self._anthropic_client:
+            self._anthropic_client = anthropic.Anthropic(api_key=a_key)
+
+        resp = self._anthropic_client.messages.create(
+            model=model,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+        )
+        text = resp.content[0].text if resp.content else ""
+        return text, resp
+
+    def _call_llama(self, prompt: str, model: str) -> tuple[str, Any]:
+        if openai is None:
+            raise ImportError("openai package is required for Llama inference. Install via 'pip install openai'.")
+        l_key = (
+            self._api_keys.get("llama")
+            or os.environ.get("GROQ_API_KEY")
+            or os.environ.get("OPENROUTER_API_KEY")
+            or os.environ.get("TOGETHER_API_KEY")
+            or os.environ.get("LLAMA_API_KEY")
+        )
+        if not l_key:
+            raise ValueError("No Llama API key provided. Set GROQ_API_KEY, OPENROUTER_API_KEY, or LLAMA_API_KEY.")
+
+        base_url = os.environ.get("LLAMA_BASE_URL")
+        if not base_url:
+            if os.environ.get("OPENROUTER_API_KEY"):
+                base_url = "https://openrouter.ai/api/v1"
+            elif os.environ.get("TOGETHER_API_KEY"):
+                base_url = "https://api.together.xyz/v1"
+            else:
+                base_url = "https://api.groq.com/openai/v1"
+
+        if not self._llama_client:
+            self._llama_client = openai.OpenAI(api_key=l_key, base_url=base_url)
+
+        resp = self._llama_client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+        )
+        text = resp.choices[0].message.content or ""
+        return text, resp
 
     def generate_content(
         self,
@@ -76,31 +267,28 @@ class GeminiUtils:
         model: str = "gemini-3.5-flash-lite",
         tools: list[dict[str, Any] | types.Tool] | None = None,
     ) -> GenerateContentResult:
-        """Calls Gemini generate_content with short retry logic."""
+        """Calls appropriate model provider with short retry logic."""
+        provider = self.get_model_provider(model)
         retries = 2
         for i in range(retries):
             try:
-                config_kwargs: dict[str, Any] = {
-                    "top_p": 0.95,
-                    "temperature": 0.1,
-                    "safety_settings": _SAFETY_SETTINGS,
-                }
-                if tools:
-                    config_kwargs["tools"] = tools
-                response = self._client.models.generate_content(
-                    contents=request.prompt,
-                    model=model,
-                    config=types.GenerateContentConfig(**config_kwargs),
-                )
-                text = response.text if response and response.text else ""
+                if provider == "openai":
+                    text, resp = self._call_openai(request.prompt, model)
+                elif provider == "anthropic":
+                    text, resp = self._call_anthropic(request.prompt, model)
+                elif provider == "llama":
+                    text, resp = self._call_llama(request.prompt, model)
+                else:
+                    text, resp = self._call_gemini(request.prompt, model, tools)
+
                 if text or (
-                    response
-                    and response.candidates
-                    and getattr(response.candidates[0], "grounding_metadata", None)
+                    resp
+                    and getattr(resp, "candidates", None)
+                    and getattr(resp.candidates[0], "grounding_metadata", None)
                 ):
-                    return GenerateContentResult(request, text, response)
+                    return GenerateContentResult(request, text, resp)
             except Exception as e:
-                logging.warning("Attempt %d/%d failed with error: %s", i + 1, retries, str(e))
+                logging.warning("Attempt %d/%d for [%s] failed with error: %s", i + 1, retries, model, str(e))
                 if i < retries - 1:
                     time.sleep(0.5)
                 else:
@@ -114,13 +302,13 @@ class GeminiUtils:
         tools: list[dict[str, Any]] | None = None,
         max_workers: int = 10,
     ) -> list[GenerateContentResult]:
-        """Calls Gemini generate_content in parallel fanning out in batches of 10."""
+        """Calls model generate_content in parallel across workers."""
         results: list[GenerateContentResult] = []
         with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             tasks_futures = {}
             for item in requests:
                 tasks_futures[executor.submit(self.generate_content, item, model, tools)] = item
-                time.sleep(0.05)
+                time.sleep(0.02)
 
             for future in futures.as_completed(tasks_futures):
                 try:
@@ -128,9 +316,12 @@ class GeminiUtils:
                     results.append(result)
                 except Exception as e:
                     req = tasks_futures[future]
-                    logging.error("Batch request failed: %s", str(e))
+                    logging.error("Batch request failed for model %s: %s", model, str(e))
                     results.append(GenerateContentResult(req, ""))
         return results
+
+
+GeminiUtils = MultiModelUtils
 
 
 @dataclasses.dataclass
@@ -240,11 +431,11 @@ class CategoryTopicsGenerator:
             return results[:3]
 
     def generate(
-        self, domain: str, country: str, language_code: str, domain_definition: str
+        self, domain: str, country: str, language_code: str, domain_definition: str, model: str = "gemini-3.5-flash"
     ) -> pd.DataFrame:
         prompt = self._generate_prompt(domain, country, language_code, domain_definition)
         req = GenerateContentRequest(prompt=prompt)
-        res = self._gemini_utils.generate_content(req)
+        res = self._gemini_utils.generate_content(req, model=model)
         
         cats_and_topics = []
         if res.generated_content:
@@ -327,6 +518,7 @@ class KeywordsGenerator:
         country: Any,
         language_code: str,
         domain_definition: str,
+        model: str = "gemini-3.5-flash",
     ) -> pd.DataFrame:
         # Cap to exactly 10 requests for a single batch of 10 parallel workers
         df_subset = category_topics_df.head(10)
@@ -348,7 +540,7 @@ class KeywordsGenerator:
             requests.append(req)
 
         # Single batch call with 10 parallel workers
-        batch_results = self._gemini_utils.generate_content_batch(requests, max_workers=10)
+        batch_results = self._gemini_utils.generate_content_batch(requests, model=model, max_workers=10)
         
         GLOBAL_COUNTRIES_FALLBACK = [
             "United States", "India", "Nigeria", "United Kingdom", "Germany",
@@ -477,6 +669,7 @@ class PromptsGenerator:
         country: str,
         domain_definition: str,
         num_prompts: int = 2,
+        model: str = "gemini-3.5-flash-lite",
     ) -> pd.DataFrame:
         requests = []
         df_subset = taxonomy_df.head(10)
@@ -502,7 +695,7 @@ class PromptsGenerator:
             )
             requests.append(req)
         
-        batch_results = self._gemini_utils.generate_content_batch(requests, max_workers=10)
+        batch_results = self._gemini_utils.generate_content_batch(requests, model=model, max_workers=10)
         
         exploded_rows = []
         for res in batch_results:
@@ -693,7 +886,7 @@ class CredibleSourceGenerator:
                 "keywords": kw_str,
             },
         )
-        tools = [types.Tool(google_search=types.GoogleSearch())]
+        tools = [types.Tool(google_search=types.GoogleSearch())] if get_model_provider(model) == "gemini" else None
         result = self._gemini_utils.generate_content(req, model=model, tools=tools)
         return self._parse_result(
             result=result,
@@ -737,7 +930,7 @@ class CredibleSourceGenerator:
             requests.append(req)
             row_indices.append(idx)
 
-        tools = [types.Tool(google_search=types.GoogleSearch())]
+        tools = [types.Tool(google_search=types.GoogleSearch())] if get_model_provider(model) == "gemini" else None
         try:
             results = self._gemini_utils.generate_content_batch(
                 requests,
@@ -750,7 +943,7 @@ class CredibleSourceGenerator:
             try:
                 results = self._gemini_utils.generate_content_batch(
                     requests,
-                    model="gemini-3.5-flash",
+                    model=model,
                     tools=tools,
                     max_workers=max_workers,
                 )
@@ -802,11 +995,12 @@ def generate_credible_sources(
     taxonomy_df: pd.DataFrame,
     domain: str,
     api_key: str | None = None,
+    api_keys: dict[str, str] | None = None,
     model: str = "gemini-3.5-flash",
     max_workers: int = 10,
 ) -> pd.DataFrame:
     """Grounds taxonomy branches with credible research papers using Google Search."""
-    client = GeminiUtils(api_key=api_key)
+    client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
     generator = CredibleSourceGenerator(client)
     return generator.generate(
         taxonomy_df=taxonomy_df,
@@ -822,10 +1016,11 @@ def fetch_citation_for_node(
     topic: str,
     keywords: str | list[str],
     api_key: str | None = None,
+    api_keys: dict[str, str] | None = None,
     model: str = "gemini-3.5-flash",
 ) -> dict[str, Any]:
     """Fetches research paper citations for a single node via Google Search grounding."""
-    client = GeminiUtils(api_key=api_key)
+    client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
     generator = CredibleSourceGenerator(client)
     return generator.generate_for_node(
         domain=domain,
@@ -843,14 +1038,16 @@ def generate_dynamic_prompts(
     domain_definition: str,
     num_prompts: int = 2,
     api_key: str | None = None,
+    api_keys: dict[str, str] | None = None,
+    model: str = "gemini-3.5-flash-lite",
     progress_callback: Any = None,
 ) -> pd.DataFrame:
     """Synthesizes dynamic prompts for a given taxonomy DataFrame."""
     if progress_callback:
-        progress_callback(0.2, "Initializing Gemini API client...")
-    client = GeminiUtils(api_key=api_key)
+        progress_callback(0.2, f"Initializing AI client for {model}...")
+    client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
     if progress_callback:
-        progress_callback(0.5, f"Synthesizing {num_prompts} prompts per topic across 10 parallel workers...")
+        progress_callback(0.5, f"Synthesizing {num_prompts} prompts per topic using {model} across parallel workers...")
     gen = PromptsGenerator(client)
     res_df = gen.generate(
         taxonomy_df=taxonomy_df,
@@ -858,6 +1055,7 @@ def generate_dynamic_prompts(
         country=country,
         domain_definition=domain_definition,
         num_prompts=num_prompts,
+        model=model,
     )
     if progress_callback:
         progress_callback(1.0, f"Generated {len(res_df)} synthetic evaluation prompts!")
@@ -872,52 +1070,58 @@ def generate_dynamic_taxonomy(
     use_case: str = "Advice seeking",
     modality: list[str] | str = "text-to-text",
     api_key: str | None = None,
+    api_keys: dict[str, str] | None = None,
+    model: str = "gemini-3.5-flash",
     progress_callback: Any = None,
 ) -> pd.DataFrame:
     """Executes the full dynamic taxonomy generation pipeline with single-batch parallelization."""
     if progress_callback:
-        progress_callback(0.15, "Initializing Gemini API client...")
+        progress_callback(0.15, f"Initializing AI client for {model}...")
     
-    gemini_client = GeminiUtils(api_key=api_key)
+    ai_client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
 
     if progress_callback:
-        progress_callback(0.35, f"Generating Level 1 (Categories) & Level 2 (Topics) for '{domain}'...")
+        progress_callback(0.35, f"Generating Level 1 & Level 2 Topics for '{domain}' with {model}...")
     
-    cat_gen = CategoryTopicsGenerator(gemini_client)
+    cat_gen = CategoryTopicsGenerator(ai_client)
     cat_topics_df = cat_gen.generate(
         domain=domain,
         country=country,
         language_code=language_code,
         domain_definition=domain_definition,
+        model=model,
     )
     if len(cat_topics_df) > 10:
         cat_topics_df = cat_topics_df.head(10)
 
     if progress_callback:
-        progress_callback(0.65, f"Executing 1 batch of {len(cat_topics_df)} parallel calls for Level 3 keywords & demographic context...")
+        progress_callback(0.65, f"Executing parallel batch for Level 3 keywords & demographic context with {model}...")
     
-    kw_gen = KeywordsGenerator(gemini_client)
+    kw_gen = KeywordsGenerator(ai_client)
     final_df = kw_gen.generate(
         category_topics_df=cat_topics_df,
         domain=domain,
         country=country,
         language_code=language_code,
         domain_definition=domain_definition,
+        model=model,
     )
 
     if progress_callback:
-        progress_callback(0.85, f"Discovering research papers via Google Search grounding for {len(final_df)} taxonomy branches...")
+        progress_callback(0.85, f"Discovering research paper citations for {len(final_df)} taxonomy branches...")
 
-    credible_gen = CredibleSourceGenerator(gemini_client)
+    # Grounding: Prefer Gemini Search grounding if Gemini key available, else use selected model
+    grounding_model = "gemini-3.5-flash" if ai_client._api_keys.get("gemini") else model
+    credible_gen = CredibleSourceGenerator(ai_client)
     try:
         final_df = credible_gen.generate(
             taxonomy_df=final_df,
             domain=domain,
-            model="gemini-3.5-flash",
+            model=grounding_model,
             max_workers=10,
         )
     except Exception as e:
-        logging.warning("Google search grounding step encountered error: %s. Setting citations to Could not find.", str(e))
+        logging.warning("Research grounding step encountered error: %s. Setting citations to Could not find.", str(e))
         final_df["paper_urls"] = [[] for _ in range(len(final_df))]
         final_df["paper_titles"] = [["Could not find"] for _ in range(len(final_df))]
         final_df["url"] = [[] for _ in range(len(final_df))]
@@ -929,7 +1133,7 @@ def generate_dynamic_taxonomy(
     final_df["index"] = list(range(len(final_df)))
 
     if progress_callback:
-        progress_callback(1.0, "Dynamic Taxonomy Generated Successfully with Research Grounding!")
+        progress_callback(1.0, f"Dynamic Taxonomy Generated Successfully with {model}!")
 
     return final_df
 
@@ -1003,12 +1207,13 @@ def generate_dynamic_evaluations(
     target_models: list[tuple[str, str]],
     max_prompts: int = 10,
     api_key: str | None = None,
+    api_keys: dict[str, str] | None = None,
     progress_callback: Any = None,
 ) -> pd.DataFrame:
     """Executes parallel evaluation calls across selected models."""
     if progress_callback:
         progress_callback(0.1, "Initializing evaluation client...")
-    client = GeminiUtils(api_key=api_key)
+    client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
     evaluator = ModelEvaluationGenerator(client)
     
     all_evals = []
@@ -1034,7 +1239,7 @@ def generate_dynamic_evaluations(
 
 
 class AutoraterJudgeGenerator:
-    """Evaluates (query, response) pairs against an annotation rubric using Gemini."""
+    """Evaluates (query, response) pairs against an annotation rubric using Gemini or other models."""
 
     def __init__(self, gemini_utils: GeminiUtils):
         self._gemini_utils = gemini_utils
@@ -1113,13 +1318,14 @@ def generate_dynamic_autoratings(
     judge_model_name: str = "gemini-3.5-flash",
     max_rows: int | None = None,
     api_key: str | None = None,
+    api_keys: dict[str, str] | None = None,
     progress_callback: Any = None,
 ) -> pd.DataFrame:
     """Executes parallel autorater judgments for evaluation responses."""
     target_count = len(eval_df) if (max_rows is None or max_rows <= 0) else min(len(eval_df), max_rows)
     if progress_callback:
         progress_callback(0.2, f"Initializing Autorater Judge model for {target_count} responses...")
-    client = GeminiUtils(api_key=api_key)
+    client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
     judge = AutoraterJudgeGenerator(client)
     if progress_callback:
         progress_callback(0.5, f"Rating all {target_count} model responses against rubric in parallel...")
