@@ -62,10 +62,28 @@ else
     "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
-# ── 2. Dependency Installation ────────────────────────────────────────────────
-echo "[3/4] Installing / verifying dependencies from requirements.txt..."
-"$VENV_DIR/bin/pip" install --upgrade pip
-"$VENV_DIR/bin/pip" install -r requirements.txt
+# ── 2. Dependency Installation (Cached & Fast) ────────────────────────────────
+REQ_STAMP="$VENV_DIR/.requirements_installed"
+NEEDS_INSTALL=false
+
+# Support manual reinstall via flag: ./run.sh --update or ./run.sh --reinstall
+if [ "$1" = "--update" ] || [ "$1" = "--reinstall" ]; then
+    NEEDS_INSTALL=true
+    shift
+elif [ ! -f "$REQ_STAMP" ] || ! cmp -s "$SCRIPT_DIR/requirements.txt" "$REQ_STAMP"; then
+    NEEDS_INSTALL=true
+elif ! "$VENV_DIR/bin/python" -c "import streamlit, pandas, plotly, google.genai" >/dev/null 2>&1; then
+    NEEDS_INSTALL=true
+fi
+
+if [ "$NEEDS_INSTALL" = true ]; then
+    echo "[3/4] Installing / updating dependencies from requirements.txt..."
+    "$VENV_DIR/bin/pip" install -r requirements.txt
+    cp "$SCRIPT_DIR/requirements.txt" "$REQ_STAMP"
+    echo "  ↳ Dependencies installed and cached."
+else
+    echo "[3/4] Dependencies already satisfied. (Skipping pip install for fast startup)"
+fi
 
 # ── 3. Gemini API Key Configuration (Secure - No Logging) ────────────────────
 echo ""
