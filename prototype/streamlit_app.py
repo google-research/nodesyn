@@ -1094,15 +1094,21 @@ elif st.session_state.step == "Concept":
                 st.markdown(badge_html, unsafe_allow_html=True)
 
                 # Expander for managing API keys directly in the UI
-                with st.expander("🔑 Manage Provider API Keys", expanded=(len(active_providers) == 0)):
-                    st.caption("API keys set via `run.sh` or environment variables are detected automatically. You can also enter or update keys here:")
+                with st.expander("🔑 Add / Override Provider API Keys", expanded=(len(active_providers) == 0)):
+                    st.caption("🔒 Keys configured via `run.sh` or environment variables remain securely on the server and are never exposed or rendered in the browser. You can enter or override keys below for this session:")
                     col_k1, col_k2 = st.columns(2)
                     with col_k1:
-                        st.text_input("Gemini API Key", value=active_api_keys.get("gemini", ""), type="password", key="gemini_api_key_input", placeholder="AIzaSy...")
-                        st.text_input("OpenAI API Key", value=active_api_keys.get("openai", ""), type="password", key="openai_api_key_input", placeholder="sk-...")
+                        gem_placeholder = "✓ Configured via environment" if "gemini" in active_providers else "Enter Gemini API Key (AIzaSy...)"
+                        st.text_input("Gemini API Key", value="", type="password", key="gemini_api_key_input", placeholder=gem_placeholder)
+                        
+                        oai_placeholder = "✓ Configured via environment" if "openai" in active_providers else "Enter OpenAI API Key (sk-...)"
+                        st.text_input("OpenAI API Key", value="", type="password", key="openai_api_key_input", placeholder=oai_placeholder)
                     with col_k2:
-                        st.text_input("Anthropic Claude API Key", value=active_api_keys.get("anthropic", ""), type="password", key="anthropic_api_key_input", placeholder="sk-ant-...")
-                        st.text_input("Meta Llama API Key (Groq / OpenRouter / Together)", value=active_api_keys.get("llama", ""), type="password", key="llama_api_key_input", placeholder="gsk_... or sk-or-...")
+                        ant_placeholder = "✓ Configured via environment" if "anthropic" in active_providers else "Enter Anthropic API Key (sk-ant-...)"
+                        st.text_input("Anthropic Claude API Key", value="", type="password", key="anthropic_api_key_input", placeholder=ant_placeholder)
+                        
+                        llama_placeholder = "✓ Configured via environment" if "llama" in active_providers else "Enter Groq / OpenRouter / Together Key"
+                        st.text_input("Meta Llama API Key", value="", type="password", key="llama_api_key_input", placeholder=llama_placeholder)
 
                 # Model selector for taxonomy generation
                 tax_options = get_selectable_taxonomy_models()
