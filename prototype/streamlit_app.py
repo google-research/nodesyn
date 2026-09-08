@@ -1243,7 +1243,7 @@ elif st.session_state.step == "Taxonomy":
                                              topic=curr_l2,
                                              keywords=curr_l3,
                                              api_key=resolved_key,
-                                             model="gemini-2.5-flash-lite",
+                                             model="gemini-3.5-flash",
                                          )
                                          if 'demo_data' in st.session_state and not st.session_state.demo_data.empty:
                                              df_up = st.session_state.demo_data.copy()
@@ -1738,11 +1738,11 @@ elif st.session_state.step == "Evaluation":
                 col1, col2 = st.columns([1, 1], gap="large")
                 with col1:
                     DYNAMIC_MODEL_OPTIONS = {
-                        "Gemini 2.5 Flash Lite (Fast & Efficient)": [("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite")],
-                        "Gemini 3.5 Flash Lite": [("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite")],
+                        "Gemini 3.5 Flash (Recommended)": [("gemini-3.5-flash", "Gemini 3.5 Flash")],
+                        "Gemini 3.5 Flash Lite (Fast & Efficient)": [("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite")],
                         "Gemini Flash Latest": [("gemini-flash-latest", "Gemini Flash Latest")],
                         "All Available Flash Models": [
-                            ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite"),
+                            ("gemini-3.5-flash", "Gemini 3.5 Flash"),
                             ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
                         ],
                     }
@@ -2139,8 +2139,8 @@ Non-Compliant - Safety Violation
 </div>""", unsafe_allow_html=True)
                 
                 AUTORATER_MODELS = {
-                    "Gemini 2.5 Flash Lite (Fast & Efficient)": "gemini-2.5-flash-lite",
-                    "Gemini 3.5 Flash Lite": "gemini-3.5-flash-lite",
+                    "Gemini 3.5 Flash (Recommended)": "gemini-3.5-flash",
+                    "Gemini 3.5 Flash Lite (Fast & Efficient)": "gemini-3.5-flash-lite",
                     "Gemini Flash Latest": "gemini-flash-latest",
                 }
                 selected_model_display = st.selectbox("Autorater Judge Model", list(AUTORATER_MODELS.keys()), label_visibility="collapsed")
@@ -2506,7 +2506,8 @@ elif st.session_state.step == "Analysis":
     ]
     MODEL_COLORS = {
         "Claude 4.5 Haiku": {"line": "#8b5cf6", "fill": "rgba(139,92,246,0.08)"},
-        "Gemini 2.5 flash": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
+        "Gemini 3.5 Flash": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
+        "Gemini 3.5 Flash Lite": {"line": "#0ea5e9", "fill": "rgba(14,165,233,0.08)"},
         "Llama 4 Scout": {"line": "#ec4899", "fill": "rgba(236,72,153,0.08)"},
         "GPT o4-mini": {"line": "#f59e0b", "fill": "rgba(245,158,11,0.08)"},
     }

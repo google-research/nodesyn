@@ -73,7 +73,7 @@ class GeminiUtils:
     def generate_content(
         self,
         request: GenerateContentRequest,
-        model: str = "gemini-2.5-flash-lite",
+        model: str = "gemini-3.5-flash-lite",
         tools: list[dict[str, Any] | types.Tool] | None = None,
     ) -> GenerateContentResult:
         """Calls Gemini generate_content with short retry logic."""
@@ -110,7 +110,7 @@ class GeminiUtils:
     def generate_content_batch(
         self,
         requests: list[GenerateContentRequest],
-        model: str = "gemini-2.5-flash-lite",
+        model: str = "gemini-3.5-flash-lite",
         tools: list[dict[str, Any]] | None = None,
         max_workers: int = 10,
     ) -> list[GenerateContentResult]:
@@ -679,7 +679,7 @@ class CredibleSourceGenerator:
         category: str,
         topic: str,
         keywords: str | list[str],
-        model: str = "gemini-2.5-flash-lite",
+        model: str = "gemini-3.5-flash",
     ) -> dict[str, Any]:
         """Fetches research paper citations for a single taxonomy node using Google Search grounding."""
         prompt = self._generate_prompt(domain, category, topic, keywords)
@@ -707,7 +707,7 @@ class CredibleSourceGenerator:
         self,
         taxonomy_df: pd.DataFrame,
         domain: str,
-        model: str = "gemini-2.5-flash-lite",
+        model: str = "gemini-3.5-flash",
         max_workers: int = 10,
     ) -> pd.DataFrame:
         """Grounds all rows in taxonomy_df with credible research papers using Google Search."""
@@ -750,7 +750,7 @@ class CredibleSourceGenerator:
             try:
                 results = self._gemini_utils.generate_content_batch(
                     requests,
-                    model="gemini-2.5-flash-lite",
+                    model="gemini-3.5-flash",
                     tools=tools,
                     max_workers=max_workers,
                 )
@@ -802,7 +802,7 @@ def generate_credible_sources(
     taxonomy_df: pd.DataFrame,
     domain: str,
     api_key: str | None = None,
-    model: str = "gemini-2.5-flash-lite",
+    model: str = "gemini-3.5-flash",
     max_workers: int = 10,
 ) -> pd.DataFrame:
     """Grounds taxonomy branches with credible research papers using Google Search."""
@@ -822,7 +822,7 @@ def fetch_citation_for_node(
     topic: str,
     keywords: str | list[str],
     api_key: str | None = None,
-    model: str = "gemini-2.5-flash-lite",
+    model: str = "gemini-3.5-flash",
 ) -> dict[str, Any]:
     """Fetches research paper citations for a single node via Google Search grounding."""
     client = GeminiUtils(api_key=api_key)
@@ -913,7 +913,7 @@ def generate_dynamic_taxonomy(
         final_df = credible_gen.generate(
             taxonomy_df=final_df,
             domain=domain,
-            model="gemini-2.5-flash-lite",
+            model="gemini-3.5-flash",
             max_workers=10,
         )
     except Exception as e:
@@ -943,8 +943,8 @@ class ModelEvaluationGenerator:
     def evaluate(
         self,
         prompts_df: pd.DataFrame,
-        model_name: str = "gemini-2.5-flash-lite",
-        display_model_name: str = "Gemini 2.5 Flash Lite",
+        model_name: str = "gemini-3.5-flash-lite",
+        display_model_name: str = "Gemini 3.5 Flash Lite",
         max_prompts: int = 10,
     ) -> pd.DataFrame:
         df_subset = prompts_df.head(max_prompts)
@@ -1043,7 +1043,7 @@ class AutoraterJudgeGenerator:
         self,
         eval_df: pd.DataFrame,
         rubric_template: str,
-        judge_model_name: str = "gemini-2.5-flash-lite",
+        judge_model_name: str = "gemini-3.5-flash",
         max_rows: int | None = None,
     ) -> pd.DataFrame:
         if max_rows and max_rows > 0:
@@ -1110,7 +1110,7 @@ class AutoraterJudgeGenerator:
 def generate_dynamic_autoratings(
     eval_df: pd.DataFrame,
     rubric_template: str,
-    judge_model_name: str = "gemini-2.5-flash-lite",
+    judge_model_name: str = "gemini-3.5-flash",
     max_rows: int | None = None,
     api_key: str | None = None,
     progress_callback: Any = None,
