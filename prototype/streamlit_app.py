@@ -63,37 +63,22 @@ PROVIDER_MODELS = {
 }
 
 def get_app_api_keys() -> dict[str, str]:
-    """Retrieves all active API keys, prioritizing session_state over environment variables."""
+    """Retrieves all active API keys securely configured in the environment via run.sh."""
     keys = {}
-    gemini_key = (
-        st.session_state.get("gemini_api_key_input")
-        or st.session_state.get("gemini_api_key")
-        or os.environ.get("GEMINI_API_KEY")
-        or os.environ.get("GOOGLE_API_KEY")
-    )
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if gemini_key and str(gemini_key).strip():
         keys["gemini"] = str(gemini_key).strip()
 
-    openai_key = (
-        st.session_state.get("openai_api_key_input")
-        or st.session_state.get("openai_api_key")
-        or os.environ.get("OPENAI_API_KEY")
-    )
+    openai_key = os.environ.get("OPENAI_API_KEY")
     if openai_key and str(openai_key).strip():
         keys["openai"] = str(openai_key).strip()
 
-    anthropic_key = (
-        st.session_state.get("anthropic_api_key_input")
-        or st.session_state.get("anthropic_api_key")
-        or os.environ.get("ANTHROPIC_API_KEY")
-    )
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     if anthropic_key and str(anthropic_key).strip():
         keys["anthropic"] = str(anthropic_key).strip()
 
     llama_key = (
-        st.session_state.get("llama_api_key_input")
-        or st.session_state.get("llama_api_key")
-        or os.environ.get("GROQ_API_KEY")
+        os.environ.get("GROQ_API_KEY")
         or os.environ.get("LLAMA_API_KEY")
         or os.environ.get("OPENROUTER_API_KEY")
         or os.environ.get("TOGETHER_API_KEY")
@@ -1079,36 +1064,20 @@ elif st.session_state.step == "Concept":
                 active_providers = get_active_providers_list()
                 
                 # Visual Provider Badges
-                st.markdown("""<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; margin-bottom: 0.25rem;">
+                st.markdown("""<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; margin-bottom: 0.35rem;">
 <span style="font-size: 1.1rem;">⚡</span>
-<label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Configured AI Providers</label>
+<label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">AI Provider Status</label>
 </div>""", unsafe_allow_html=True)
                 
-                badge_html = '<div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">'
-                for p_key, p_name in PROVIDER_DISPLAY_NAMES.items():
-                    if p_key in active_providers:
-                        badge_html += f'<span style="background: #f0fdf4; border: 1px solid #86efac; color: #166534; font-size: 0.78rem; font-weight: 600; padding: 4px 10px; border-radius: 9999px;">✓ {PROVIDER_ICONS[p_key]} {p_name}</span>'
-                    else:
-                        badge_html += f'<span style="background: #f8fafc; border: 1px solid #e2e8f0; color: #94a3b8; font-size: 0.78rem; font-weight: 500; padding: 4px 10px; border-radius: 9999px;">○ {PROVIDER_ICONS[p_key]} {p_name}</span>'
-                badge_html += '</div>'
-                st.markdown(badge_html, unsafe_allow_html=True)
-
-                # Expander for managing API keys directly in the UI
-                with st.expander("🔑 Add / Override Provider API Keys", expanded=(len(active_providers) == 0)):
-                    st.caption("🔒 Keys configured via `run.sh` or environment variables remain securely on the server and are never exposed or rendered in the browser. You can enter or override keys below for this session:")
-                    col_k1, col_k2 = st.columns(2)
-                    with col_k1:
-                        gem_placeholder = "✓ Configured via environment" if "gemini" in active_providers else "Enter Gemini API Key (AIzaSy...)"
-                        st.text_input("Gemini API Key", value="", type="password", key="gemini_api_key_input", placeholder=gem_placeholder)
-                        
-                        oai_placeholder = "✓ Configured via environment" if "openai" in active_providers else "Enter OpenAI API Key (sk-...)"
-                        st.text_input("OpenAI API Key", value="", type="password", key="openai_api_key_input", placeholder=oai_placeholder)
-                    with col_k2:
-                        ant_placeholder = "✓ Configured via environment" if "anthropic" in active_providers else "Enter Anthropic API Key (sk-ant-...)"
-                        st.text_input("Anthropic Claude API Key", value="", type="password", key="anthropic_api_key_input", placeholder=ant_placeholder)
-                        
-                        llama_placeholder = "✓ Configured via environment" if "llama" in active_providers else "Enter Groq / OpenRouter / Together Key"
-                        st.text_input("Meta Llama API Key", value="", type="password", key="llama_api_key_input", placeholder=llama_placeholder)
+                if active_providers:
+                    badge_html = '<div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">'
+                    for p_key in active_providers:
+                        p_name = PROVIDER_DISPLAY_NAMES.get(p_key, p_key)
+                        badge_html += f'<span style="background: #f0fdf4; border: 1px solid #86efac; color: #166534; font-size: 0.82rem; font-weight: 600; padding: 5px 12px; border-radius: 9999px;">✓ {PROVIDER_ICONS[p_key]} {p_name} API Key Detected</span>'
+                    badge_html += '</div>'
+                    st.markdown(badge_html, unsafe_allow_html=True)
+                else:
+                    st.warning("⚠️ No API keys detected. Please launch via `./run.sh` to configure provider API keys.")
 
                 # Model selector for taxonomy generation
                 tax_options = get_selectable_taxonomy_models()
@@ -1155,7 +1124,7 @@ elif st.session_state.step == "Concept":
                 chosen_provider = get_model_provider(selected_tax_model)
                 if chosen_provider not in current_api_keys or not current_api_keys[chosen_provider]:
                     p_name = PROVIDER_DISPLAY_NAMES.get(chosen_provider, chosen_provider)
-                    st.error(f"⚠️ Missing API key for {p_name}. Please provide it in the '🔑 Manage Provider API Keys' expander above or configure it in run.sh.")
+                    st.error(f"⚠️ Missing API key for {p_name}. Please configure it when launching via `./run.sh` or set the environment variable.")
                 else:
                     resolved_key = current_api_keys[chosen_provider]
                     domain = st.session_state.target_concept
