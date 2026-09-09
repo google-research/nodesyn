@@ -1,4 +1,5 @@
 import os
+import math
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -1946,8 +1947,10 @@ elif st.session_state.step == "Evaluation":
                             "country": row.get('extracted_Country', row.get('cleaned_Country', 'Global')),
                         })
             
-            prompts_eval_df = pd.DataFrame(prompts_to_eval).drop_duplicates(subset=['prompts']).head(10)
-            n_queries_available = len(prompts_eval_df)
+            all_unique_prompts = pd.DataFrame(prompts_to_eval).drop_duplicates(subset=['prompts']) if prompts_to_eval else pd.DataFrame()
+            prompts_eval_df = all_unique_prompts.head(50)
+            n_queries_available = len(all_unique_prompts)
+            n_display_queue = min(n_queries_available, 50) if n_queries_available > 0 else 50
 
             with st.container():
                 st.markdown("""
@@ -1973,15 +1976,15 @@ elif st.session_state.step == "Evaluation":
                     st.markdown(f"""
 <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.1rem; margin-top: 0.25rem;">
 <div style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Benchmark Query Queue</div>
-<div style="font-size: 1.5rem; font-weight: 800; color: #0f172a;">{n_queries_available} Grounded Queries</div>
-<div style="font-size: 12px; color: #64748b; margin-top: 2px;">Synthesized from live taxonomy leaf nodes.</div>
+<div style="font-size: 1.5rem; font-weight: 800; color: #0f172a;">{n_display_queue} Grounded Queries</div>
+<div style="font-size: 12px; color: #64748b; margin-top: 2px;">Synthesized from live taxonomy leaf nodes (target batch: 50).</div>
 </div>
 """, unsafe_allow_html=True)
 
                 st.write("")
                 col_gen, _ = st.columns([1.5, 3])
                 with col_gen:
-                    if st.button("🚀 Generate Model Responses", type="primary", use_container_width=True):
+                    if st.button("🚀 Generate Model Responses (50 Queries)", type="primary", use_container_width=True):
                         current_keys = get_app_api_keys()
                         progress_bar = st.progress(0.0)
                         status_text = st.empty()
@@ -1991,10 +1994,42 @@ elif st.session_state.step == "Evaluation":
                             status_text.markdown(f"**Status:** {msg}")
 
                         try:
+                            eval_batch_df = prompts_eval_df
+                            # If fewer than 50 queries are available in source_df, auto-synthesize additional queries on-the-fly to reach 50
+                            if len(eval_batch_df) < 50 and not source_df.empty:
+                                status_text.markdown("**Status:** Synthesizing additional benchmark queries to reach 50 prompts...")
+                                needed = 50 - len(eval_batch_df)
+                                prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash-lite")
+                                num_per_row = max(2, math.ceil(needed / max(len(source_df), 1)))
+                                more_prompts_df = generate_dynamic_prompts(
+                                    taxonomy_df=source_df,
+                                    domain=st.session_state.get('saved_concept', 'Medical Advice'),
+                                    country=st.session_state.get('saved_countries', ['Global']),
+                                    domain_definition=st.session_state.get('saved_definition', ''),
+                                    num_prompts=num_per_row,
+                                    api_key=current_keys.get("gemini"),
+                                    api_keys=current_keys,
+                                    model=prompt_model,
+                                )
+                                if not more_prompts_df.empty:
+                                    st.session_state.demo_data = pd.concat([st.session_state.demo_data, more_prompts_df], ignore_index=True)
+                                    new_rows = []
+                                    for _, r in more_prompts_df.iterrows():
+                                        p_str = str(r.get("prompts", "")).strip()
+                                        if p_str:
+                                            new_rows.append({
+                                                "prompts": p_str,
+                                                "level1": r.get("level1", "General"),
+                                                "level2": r.get("level2", "General"),
+                                                "level3": r.get("level3", "General"),
+                                                "country": r.get("extracted_Country", "Global"),
+                                            })
+                                    eval_batch_df = pd.concat([eval_batch_df, pd.DataFrame(new_rows)], ignore_index=True).drop_duplicates(subset=['prompts']).head(50)
+
                             eval_results_df = generate_dynamic_evaluations(
-                                prompts_df=prompts_eval_df,
+                                prompts_df=eval_batch_df,
                                 target_models=target_model_tuples,
-                                max_prompts=10,
+                                max_prompts=50,
                                 api_key=current_keys.get("gemini"),
                                 api_keys=current_keys,
                                 progress_callback=handle_progress,
@@ -2084,21 +2119,21 @@ elif st.session_state.step == "Evaluation":
                         st.session_state.step = "Autorater"
                         st.rerun()
                 with col_eval_more:
-                    if st.button("✨ Evaluate +10 More", use_container_width=True):
-                        with st.spinner("Synthesizing & evaluating +10 additional queries..."):
+                    if st.button("✨ Evaluate +25 More", use_container_width=True):
+                        with st.spinner("Synthesizing & evaluating +25 additional queries..."):
                             try:
                                 current_keys = get_app_api_keys()
                                 already_evaluated = set(eval_results['query'].unique())
                                 unevaluated = [p for p in prompts_to_eval if p['prompts'] not in already_evaluated]
 
-                                if len(unevaluated) < 10:
+                                if len(unevaluated) < 25:
                                     prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash-lite")
                                     more_prompts_df = generate_dynamic_prompts(
                                         taxonomy_df=st.session_state.demo_data,
                                         domain=st.session_state.get('saved_concept', 'Medical Advice'),
                                         country=st.session_state.get('saved_countries', ['Global']),
                                         domain_definition=st.session_state.get('saved_definition', ''),
-                                        num_prompts=2,
+                                        num_prompts=3,
                                         api_key=current_keys.get("gemini"),
                                         api_keys=current_keys,
                                         model=prompt_model,
@@ -2116,18 +2151,18 @@ elif st.session_state.step == "Evaluation":
                                                     "country": r.get("extracted_Country", "Global"),
                                                 })
 
-                                batch_to_eval = pd.DataFrame(unevaluated).drop_duplicates(subset=['prompts']).head(10)
+                                batch_to_eval = pd.DataFrame(unevaluated).drop_duplicates(subset=['prompts']).head(25)
                                 if not batch_to_eval.empty:
                                     new_eval_df = generate_dynamic_evaluations(
                                         prompts_df=batch_to_eval,
                                         target_models=target_model_tuples,
-                                        max_prompts=10,
+                                        max_prompts=25,
                                         api_key=current_keys.get("gemini"),
                                         api_keys=current_keys,
                                     )
                                     if not new_eval_df.empty:
                                         st.session_state.eval_data = pd.concat([st.session_state.eval_data, new_eval_df], ignore_index=True)
-                                        st.toast("✅ Added +10 model evaluation responses!")
+                                        st.toast("✅ Added +25 model evaluation responses!")
                                         st.rerun()
                             except Exception as err:
                                 st.error(f"❌ Evaluation error: {err}")
