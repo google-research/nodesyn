@@ -1043,7 +1043,26 @@ elif st.session_state.step == "Concept":
 <span style="font-size: 1.1rem;">🌍</span>
 <label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Target Countries / Regions</label>
 </div>""", unsafe_allow_html=True)
-            countries_list = ["ALL", "Global", "USA", "UK", "Ghana", "Nigeria", "Canada", "Australia", "India", "Germany", "Japan", "Brazil", "South Africa", "Kenya"]
+            countries_list = [
+                "ALL", "Global",
+                "Afghanistan", "Albania", "Algeria", "Argentina", "Armenia", "Australia", "Austria", "Azerbaijan",
+                "Bahamas", "Bahrain", "Bangladesh", "Barbados", "Belgium", "Belize", "Bhutan", "Bolivia",
+                "Bosnia and Herzegovina", "Botswana", "Brazil", "Bulgaria", "Cambodia", "Cameroon", "Canada",
+                "Chile", "China", "Colombia", "Costa Rica", "Croatia", "Cuba", "Cyprus", "Czech Republic",
+                "Denmark", "Dominican Republic", "Ecuador", "Egypt", "El Salvador", "Estonia", "Ethiopia",
+                "Fiji", "Finland", "France", "Georgia", "Germany", "Ghana", "Greece", "Guatemala", "Guyana",
+                "Haiti", "Honduras", "Hong Kong", "Hungary", "Iceland", "India", "Indonesia", "Iran", "Iraq",
+                "Ireland", "Israel", "Italy", "Ivory Coast", "Jamaica", "Japan", "Jordan", "Kazakhstan",
+                "Kenya", "Kuwait", "Lebanon", "Lithuania", "Luxembourg", "Malaysia", "Maldives", "Malta",
+                "Mexico", "Moldova", "Mongolia", "Morocco", "Mozambique", "Myanmar", "Nepal", "Netherlands",
+                "New Zealand", "Nigeria", "North Macedonia", "Norway", "Oman", "Pakistan", "Panama", "Paraguay",
+                "Peru", "Philippines", "Poland", "Portugal", "Qatar", "Romania", "Rwanda", "Saudi Arabia",
+                "Senegal", "Serbia", "Singapore", "Slovakia", "Slovenia", "South Africa", "South Korea",
+                "Spain", "Sri Lanka", "Sudan", "Sweden", "Switzerland", "Syria", "Taiwan", "Tanzania",
+                "Thailand", "Trinidad and Tobago", "Tunisia", "Turkey", "Uganda", "Ukraine", "United Arab Emirates",
+                "United Kingdom", "United States", "UK", "USA", "Uruguay", "Uzbekistan", "Venezuela", "Vietnam",
+                "Yemen", "Zambia", "Zimbabwe"
+            ]
             if 'target_countries' not in st.session_state:
                 st.session_state.target_countries = ["ALL"] if is_dynamic else ["Global"]
             st.multiselect("Target Countries", countries_list, key="target_countries", label_visibility="collapsed")

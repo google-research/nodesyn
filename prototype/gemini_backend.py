@@ -544,7 +544,9 @@ class KeywordsGenerator:
         
         GLOBAL_COUNTRIES_FALLBACK = [
             "United States", "India", "Nigeria", "United Kingdom", "Germany",
-            "Brazil", "Japan", "South Africa", "Canada", "Australia"
+            "Brazil", "Japan", "South Africa", "Canada", "Australia",
+            "France", "Ghana", "Kenya", "Mexico", "Singapore", "South Korea",
+            "Egypt", "Indonesia", "Spain", "Italy"
         ]
 
         rows = []
