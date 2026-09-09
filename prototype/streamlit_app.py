@@ -44,8 +44,11 @@ PROVIDER_ICONS = {
 
 PROVIDER_MODELS = {
     "gemini": [
+        ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+        ("gemini-3.5-pro", "Gemini 3.5 Pro"),
         ("gemini-3.5-flash", "Gemini 3.5 Flash"),
         ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+        ("gemini-3.0-pro", "Gemini 3.0 Pro"),
     ],
     "openai": [
         ("gpt-4o", "GPT-4o"),
@@ -96,7 +99,10 @@ def get_selectable_taxonomy_models() -> dict[str, str]:
     active = get_active_providers_list()
     options = {}
     if not active:
+        options["Gemini 3.8 Flash (Google)"] = "gemini-3.8-flash"
+        options["Gemini 3.5 Pro (Google)"] = "gemini-3.5-pro"
         options["Gemini 3.5 Flash (Google)"] = "gemini-3.5-flash"
+        options["Gemini 3.5 Flash Lite (Google)"] = "gemini-3.5-flash-lite"
         return options
     for p in active:
         p_name = PROVIDER_DISPLAY_NAMES.get(p, p)
@@ -112,7 +118,7 @@ def get_evaluation_model_options() -> dict[str, list[tuple[str, str]]]:
     if len(active) > 1:
         cross_provider = []
         if "gemini" in active:
-            cross_provider.append(("gemini-3.5-flash", "Gemini 3.5 Flash"))
+            cross_provider.append(("gemini-3.8-flash", "Gemini 3.8 Flash"))
         if "openai" in active:
             cross_provider.append(("gpt-4o", "GPT-4o"))
         if "anthropic" in active:
@@ -122,9 +128,22 @@ def get_evaluation_model_options() -> dict[str, list[tuple[str, str]]]:
         options["🏆 Cross-Provider Benchmark (Compare All Configured Providers)"] = cross_provider
 
     if "gemini" in active:
-        options["Gemini 3.5 Flash (Google)"] = [("gemini-3.5-flash", "Gemini 3.5 Flash")]
-        options["Gemini 3.5 Flash Lite (Google)"] = [("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite")]
+        options["Gemini 3.8 Flash (Latest Flash)"] = [("gemini-3.8-flash", "Gemini 3.8 Flash")]
+        options["Gemini 3.5 Pro (Advanced Reasoning)"] = [("gemini-3.5-pro", "Gemini 3.5 Pro")]
+        options["Gemini 3.5 Flash (Fast & Capable)"] = [("gemini-3.5-flash", "Gemini 3.5 Flash")]
+        options["Gemini 3.5 Flash Lite (High Throughput)"] = [("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite")]
+        options["Gemini Pro vs Flash (3.5 Pro & 3.8 Flash)"] = [
+            ("gemini-3.5-pro", "Gemini 3.5 Pro"),
+            ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+        ]
+        options["All Gemini Flash Models (3.8 Flash, 3.5 Flash, 3.5 Lite)"] = [
+            ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+            ("gemini-3.5-flash", "Gemini 3.5 Flash"),
+            ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+        ]
         options["All Gemini Models"] = [
+            ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+            ("gemini-3.5-pro", "Gemini 3.5 Pro"),
             ("gemini-3.5-flash", "Gemini 3.5 Flash"),
             ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
         ]
@@ -155,6 +174,8 @@ def get_evaluation_model_options() -> dict[str, list[tuple[str, str]]]:
         ]
 
     if not options:
+        options["Gemini 3.8 Flash (Latest Flash)"] = [("gemini-3.8-flash", "Gemini 3.8 Flash")]
+        options["Gemini 3.5 Pro (Advanced Reasoning)"] = [("gemini-3.5-pro", "Gemini 3.5 Pro")]
         options["Gemini 3.5 Flash (Google)"] = [("gemini-3.5-flash", "Gemini 3.5 Flash")]
         options["Gemini 3.5 Flash Lite (Google)"] = [("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite")]
         
@@ -165,7 +186,9 @@ def get_autorater_judge_options() -> dict[str, str]:
     active = [p for p in ["gemini", "openai", "anthropic", "llama"] if p in keys and keys[p]]
     options = {}
     if "gemini" in active:
-        options["Gemini 3.5 Flash (Google) - Recommended"] = "gemini-3.5-flash"
+        options["Gemini 3.5 Pro (Google) - Advanced Judge"] = "gemini-3.5-pro"
+        options["Gemini 3.8 Flash (Google) - Fast Judge"] = "gemini-3.8-flash"
+        options["Gemini 3.5 Flash (Google) - Standard"] = "gemini-3.5-flash"
         options["Gemini 3.5 Flash Lite (Google)"] = "gemini-3.5-flash-lite"
     if "openai" in active:
         options["GPT-4o (OpenAI Judge)"] = "gpt-4o"
@@ -177,7 +200,9 @@ def get_autorater_judge_options() -> dict[str, str]:
         options["Llama 3.3 70B (Meta Judge)"] = "llama-3.3-70b-versatile"
 
     if not options:
-        options["Gemini 3.5 Flash (Google) - Recommended"] = "gemini-3.5-flash"
+        options["Gemini 3.5 Pro (Google) - Advanced Judge"] = "gemini-3.5-pro"
+        options["Gemini 3.8 Flash (Google) - Fast Judge"] = "gemini-3.8-flash"
+        options["Gemini 3.5 Flash (Google) - Standard"] = "gemini-3.5-flash"
     return options
 
 # Page config
@@ -2679,6 +2704,9 @@ elif st.session_state.step == "Analysis":
     ]
     MODEL_COLORS = {
         # Gemini
+        "Gemini 3.8 Flash": {"line": "#4f46e5", "fill": "rgba(79,70,229,0.08)"},
+        "Gemini 3.5 Pro": {"line": "#4338ca", "fill": "rgba(67,56,202,0.08)"},
+        "Gemini 3.0 Pro": {"line": "#3730a3", "fill": "rgba(55,48,163,0.08)"},
         "Gemini 3.5 Flash": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
         "Gemini 3.5 Flash Lite": {"line": "#0ea5e9", "fill": "rgba(14,165,233,0.08)"},
         "Gemini Flash Latest": {"line": "#4f46e5", "fill": "rgba(79,70,229,0.08)"},
