@@ -1529,14 +1529,10 @@ elif st.session_state.step == "Taxonomy":
                              not_found_title = paper_titles[0] if (paper_titles and paper_titles[0]) else "Could not find"
                              st.markdown(f"- 📄 *{not_found_title}*")
 
-                         if is_dynamic_mode and paper_content and paper_content not in ["Could not find", "None", ""]:
-                             with st.expander("📑 Grounded Paper Context & Demographics", expanded=False):
-                                 st.markdown(f"<div style='font-size:0.85rem; color:#475569; white-space:pre-wrap;'>{paper_content}</div>", unsafe_allow_html=True)
                      else:
                          st.warning("Data not found for this node.")
             st.markdown('</div>', unsafe_allow_html=True)
             
-    st.write("")
     if is_dynamic:
         if not st.session_state.demo_data.empty:
             col_next, col_csv, col_restart = st.columns([1.5, 1, 1])
@@ -1878,6 +1874,9 @@ elif st.session_state.step == "Data":
         if selected_mod:
             display_df = display_df[display_df['Modality'].isin(selected_mod)]
 
+        display_df = display_df.reset_index(drop=True)
+        display_df.index = range(1, len(display_df) + 1)
+
         # Action row for download button
         col_btn, _ = st.columns([1, 2])
         with col_btn:
@@ -2144,6 +2143,8 @@ elif st.session_state.step == "Evaluation":
                     sel_m = st.selectbox("Filter by Model Name", options=m_opts)
                     if sel_m != 'All':
                         display_df = display_df[display_df['model name'] == sel_m]
+                display_df = display_df.reset_index(drop=True)
+                display_df.index = range(1, len(display_df) + 1)
 
                 col_btn, _ = st.columns([1, 2])
                 with col_btn:
@@ -2312,6 +2313,8 @@ elif st.session_state.step == "Evaluation":
                 
                 display_df['query'] = display_df['query'].apply(clean_query)
                 display_df = display_df.rename(columns={'target_model': 'model name'})
+                display_df = display_df.reset_index(drop=True)
+                display_df.index = range(1, len(display_df) + 1)
 
                 col_btn, _ = st.columns([1, 2])
                 with col_btn:
@@ -2519,6 +2522,8 @@ Non-Compliant - Safety Violation
 
                     display_feedback = autorater_df[['query', 'target_model', 'response', 'label']].copy()
                     display_feedback = display_feedback.rename(columns={'target_model': 'model name'})
+                    display_feedback = display_feedback.reset_index(drop=True)
+                    display_feedback.index = range(1, len(display_feedback) + 1)
 
                     col_dl, _ = st.columns([1.5, 1])
                     with col_dl:
@@ -2580,7 +2585,7 @@ Non-Compliant - Safety Violation
 <span style="font-size: 1.1rem;">🤖</span>
 <label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Autorater model</label>
 </div>""", unsafe_allow_html=True)
-            selected_model = st.selectbox("Autorater model", ["Gemini", "GPT"], label_visibility="collapsed")
+            selected_model = st.selectbox("Autorater model", ["Gemini", "GPT"], key="static_autorater_model_select", label_visibility="collapsed")
             
             if st.button("Rate", type="secondary", key="start_autorater_btn"):
                 st.session_state.annotation_started = True
@@ -2594,7 +2599,7 @@ Non-Compliant - Safety Violation
 <h3 style="margin: 0; color: #0f172a; font-size: 1.25rem; font-weight: 800;">Autorater Feedback</h3>
 </div>
 """, unsafe_allow_html=True)
-            if st.session_state.get("annotation_started", False):
+            if st.session_state.get("annotation_started", True):
                 try:
                     eval_df = None
                     for fname in ["evaluation_data.csv", "evaluation_data_2.csv"]:
@@ -2606,7 +2611,6 @@ Non-Compliant - Safety Violation
                                 pass
                     if eval_df is None:
                         raise FileNotFoundError("evaluation_data.csv not found.")
-                    display_df = eval_df.iloc[:, :5].copy()
                     
                     def clean_query(q):
                         if isinstance(q, str) and q.strip().startswith('['):
@@ -2618,23 +2622,91 @@ Non-Compliant - Safety Violation
                                 pass
                         return q
                     
-                    display_df['query'] = display_df['query'].apply(clean_query)
-                    
+                    label_col = 'label_gpt' if selected_model == "GPT" else 'label_gemini'
+                    if label_col in eval_df.columns:
+                        label_series = eval_df[label_col].fillna('Disclosure - with instructions')
+                    elif 'label' in eval_df.columns:
+                        label_series = eval_df['label'].fillna('Disclosure - with instructions')
+                    else:
+                        label_series = 'Disclosure - with instructions'
+
+                    target_col = 'target_model' if 'target_model' in eval_df.columns else ('model name' if 'model name' in eval_df.columns else None)
+                    model_series = eval_df[target_col] if target_col else 'Target Model'
+
+                    display_df = pd.DataFrame({
+                        'query': eval_df['query'].apply(clean_query),
+                        'model name': model_series,
+                        'response': eval_df['response'],
+                        'label': label_series
+                    })
+                    display_df = display_df.reset_index(drop=True)
+                    display_df.index = range(1, len(display_df) + 1)
+
+                    n_rated = len(display_df)
+                    n_unique_labels = display_df['label'].nunique()
+                    judge_display = f"{selected_model} Autorater"
+
+                    st.markdown(f"""
+<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 1rem;">
+<div class="content-card" style="padding: 0.9rem; margin-bottom: 0;">
+<div style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase;">Total Rated</div>
+<div style="font-size: 1.5rem; font-weight: 900; color: #0f172a;">{n_rated}</div>
+</div>
+<div class="content-card" style="padding: 0.9rem; margin-bottom: 0;">
+<div style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase;">Categories</div>
+<div style="font-size: 1.5rem; font-weight: 900; color: #4f46e5;">{n_unique_labels}</div>
+</div>
+<div class="content-card" style="padding: 0.9rem; margin-bottom: 0;">
+<div style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase;">Judge Model</div>
+<div style="font-size: 0.95rem; font-weight: 800; color: #059669; margin-top: 4px;">{judge_display}</div>
+</div>
+</div>
+""", unsafe_allow_html=True)
+
+                    col_dl, _ = st.columns([1.5, 1])
+                    with col_dl:
+                        csv_bytes = display_df.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            "📥 Download Rated Data (CSV)",
+                            data=csv_bytes,
+                            file_name=f"{active_concept.lower().replace(' ', '_')}_{selected_model.lower()}_autorater_feedback.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                            key="stat_autorater_dl_btn"
+                        )
+
                     st.dataframe(
                         display_df,
                         use_container_width=True,
                         height=max(400, min(len(display_df) * 45, 600)),
+                        column_config={
+                            "query": st.column_config.TextColumn("Query", width="medium"),
+                            "model name": st.column_config.TextColumn("Model Name", width="small"),
+                            "response": st.column_config.TextColumn("Model Response", width="large"),
+                            "label": st.column_config.TextColumn("Autorater Label", width="medium"),
+                        }
                     )
                     
                 except FileNotFoundError:
-                    st.error("evaluation_data_2.csv not found.")
+                    st.error("evaluation_data.csv not found.")
             else:
                 st.info("Click 'Rate' on the left to load the feedback data.")
 
-        if st.button("Next: Analyze ratings", type="primary"):
-            st.session_state.highest_step = max(st.session_state.highest_step, 7)
-            st.session_state.step = "Analysis"
-            st.rerun()
+        st.write("")
+        col_next_an, col_reconfig, col_h_stat = st.columns([1.5, 1, 1])
+        with col_next_an:
+            if st.button("Next: Analyze ratings ➔", type="primary", use_container_width=True, key="stat_autorater_next"):
+                st.session_state.highest_step = max(st.session_state.highest_step, 7)
+                st.session_state.step = "Analysis"
+                st.rerun()
+        with col_reconfig:
+            if st.button("🔄 Configure New Concept", use_container_width=True, key="stat_autorater_reconfig"):
+                st.session_state.step = "Concept"
+                st.rerun()
+        with col_h_stat:
+            if st.button("🏠 Home", use_container_width=True, key="stat_autorater_home"):
+                st.session_state.step = "Home"
+                st.rerun()
 
 elif st.session_state.step == "Analysis":
     # ── Hero Banner ──────────────────────────────────────────────────────────
@@ -2804,7 +2876,19 @@ elif st.session_state.step == "Analysis":
             except FileNotFoundError:
                 return pd.DataFrame()
 
-        df_med_plot_cleaned = load_analyse_data()
+        df_med_plot_cleaned = load_analyse_data().copy()
+        if not df_med_plot_cleaned.empty:
+            sel_judge = st.session_state.get("static_autorater_model_select", "Gemini")
+            if sel_judge == "GPT" and "label_gpt" in df_med_plot_cleaned.columns:
+                df_med_plot_cleaned["Safety Status"] = df_med_plot_cleaned["label_gpt"]
+                df_med_plot_cleaned["Binary Safety Status"] = df_med_plot_cleaned["label_gpt"].apply(
+                    lambda x: "No Disclosure" if str(x).strip().lower() == "no disclosure" else "Disclosure"
+                )
+            elif "label_gemini" in df_med_plot_cleaned.columns:
+                df_med_plot_cleaned["Safety Status"] = df_med_plot_cleaned["label_gemini"]
+                df_med_plot_cleaned["Binary Safety Status"] = df_med_plot_cleaned["label_gemini"].apply(
+                    lambda x: "No Disclosure" if str(x).strip().lower() == "no disclosure" else "Disclosure"
+                )
 
     # ── Shared Styling Constants ─────────────────────────────────────────────
     FONT_STYLE = dict(family="'Inter', sans-serif", size=14, color="#334155")
