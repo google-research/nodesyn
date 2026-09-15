@@ -2180,6 +2180,7 @@ elif st.session_state.step == "Evaluation":
                         st.session_state.step = "Home"
                         st.rerun()
 
+    else:
         # Static Evaluation
         @st.cache_data
         def load_eval_data():
