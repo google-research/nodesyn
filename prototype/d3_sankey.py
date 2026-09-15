@@ -41,7 +41,7 @@ def create_d3_sankey_html(df_final, height=700, scale_factor=1.0):
 
     df_exploded = df_exploded.loc[:, ~df_exploded.columns.duplicated()]
 
-    flow_cols = ['Domain', 'level1', 'level2', 'level3', 'user_group', 'cleaned_Country']
+    flow_cols = ['Domain', 'level1', 'level2', 'level3', 'cleaned_Country', 'user_group']
     flow_cols = [c for c in flow_cols if c in df_exploded.columns]
 
     for col in flow_cols:
@@ -56,9 +56,8 @@ def create_d3_sankey_html(df_final, height=700, scale_factor=1.0):
 
     # Filter config
     filter_map = {
-        'user_group': 'User Groups', 'level1': 'Level 1s',
+        'level1': 'Level 1s', 'cleaned_Country': 'Countries', 'user_group': 'User Groups',
         'user_case': 'User Cases', 'model_modality': 'Model Modalities',
-        'cleaned_Country': 'Countries',
     }
     filters = []
     for col, label in filter_map.items():

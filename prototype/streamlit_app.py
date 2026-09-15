@@ -570,7 +570,7 @@ def create_sankey_visualization(df_final):
         if df.empty:
             return pd.DataFrame(columns=['source', 'target', 'count_1'])
         
-        required_cols = ['Domain', 'level1', 'level2', 'level3', 'user_group', 'cleaned_Country']
+        required_cols = ['Domain', 'level1', 'level2', 'level3', 'cleaned_Country', 'user_group']
         existing_cols = [col for col in required_cols if col in df.columns]
         
         pairs = []
@@ -605,14 +605,14 @@ def create_sankey_visualization(df_final):
         'level1':          {'solid': '#7c3aed', 'light': 'rgba(124,58,237,0.28)'},   # Vivid Purple
         'level2':          {'solid': '#db2777', 'light': 'rgba(219,39,119,0.25)'},   # Deep Rose
         'level3':          {'solid': '#ea580c', 'light': 'rgba(234,88,12,0.25)'},    # Burnt Orange
-        'user_group':      {'solid': '#059669', 'light': 'rgba(5,150,105,0.25)'},    # Deep Emerald
         'cleaned_Country': {'solid': '#0284c7', 'light': 'rgba(2,132,199,0.25)'},   # Deep Sky
+        'user_group':      {'solid': '#059669', 'light': 'rgba(5,150,105,0.25)'},    # Deep Emerald
     }
     _LEVEL_LABELS = {
         'Domain': 'Domain', 'level1': 'L1', 'level2': 'L2',
-        'level3': 'L3', 'user_group': 'User Group', 'cleaned_Country': 'Country'
+        'level3': 'L3', 'cleaned_Country': 'Country', 'user_group': 'User Group'
     }
-    _LEVEL_ORDER = ['Domain', 'level1', 'level2', 'level3', 'user_group', 'cleaned_Country']
+    _LEVEL_ORDER = ['Domain', 'level1', 'level2', 'level3', 'cleaned_Country', 'user_group']
 
     def _build_node_level_map(filtered_df):
         """Build a cleaned-label → level mapping, matching generate_flow's cleaning."""
@@ -1250,15 +1250,15 @@ elif st.session_state.step == "Taxonomy":
 <div style="background: white; border: 1px solid #e2e8f0; border-radius: 16px; padding: 1.25rem 1.5rem; margin-bottom: 0.75rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
 <div>
 <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800; color: #0f172a; letter-spacing: -0.01em; font-family: 'Inter', sans-serif;">Taxonomy Flow Visualizer</h3>
-<p style="margin: 4px 0 0 0; font-size: 0.78rem; color: #94a3b8; font-family: 'Inter', sans-serif;">Domain → L1 → L2 → L3 → User Group → Country</p>
+<p style="margin: 4px 0 0 0; font-size: 0.78rem; color: #94a3b8; font-family: 'Inter', sans-serif;">Domain → L1 → L2 → L3 → Country → User Group</p>
 </div>
 <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
 <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; border-radius: 3px; background: #4f46e5;"></span><span style="font-size: 11px; color: #64748b; font-weight: 600;">Domain</span></span>
 <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; border-radius: 3px; background: #7c3aed;"></span><span style="font-size: 11px; color: #64748b; font-weight: 600;">L1</span></span>
 <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; border-radius: 3px; background: #db2777;"></span><span style="font-size: 11px; color: #64748b; font-weight: 600;">L2</span></span>
 <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; border-radius: 3px; background: #ea580c;"></span><span style="font-size: 11px; color: #64748b; font-weight: 600;">L3</span></span>
-<span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; border-radius: 3px; background: #059669;"></span><span style="font-size: 11px; color: #64748b; font-weight: 600;">User Group</span></span>
 <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; border-radius: 3px; background: #0284c7;"></span><span style="font-size: 11px; color: #64748b; font-weight: 600;">Country</span></span>
+<span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; border-radius: 3px; background: #059669;"></span><span style="font-size: 11px; color: #64748b; font-weight: 600;">User Group</span></span>
 </div>
 </div>
 """, unsafe_allow_html=True)
