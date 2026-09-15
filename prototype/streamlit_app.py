@@ -92,6 +92,33 @@ def get_app_api_keys() -> dict[str, str]:
 
     return keys
 
+def is_running_locally() -> bool:
+    """Checks if the application is running in a local environment."""
+    if any(os.environ.get(k) for k in [
+        "STREAMLIT_SHARING_MODE",
+        "K_SERVICE",        # Google Cloud Run
+        "GAE_APPLICATION",  # Google App Engine
+        "SPACE_ID",         # HuggingFace Spaces
+    ]):
+        return False
+
+    try:
+        if hasattr(st, "context") and hasattr(st.context, "headers"):
+            headers = st.context.headers or {}
+            host = headers.get("host", "").lower()
+            if host:
+                if any(h in host for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                    return True
+                return False
+    except Exception:
+        pass
+
+    server_addr = os.environ.get("STREAMLIT_SERVER_ADDRESS", "").lower()
+    if server_addr and not any(h in server_addr for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+        return False
+
+    return True
+
 def get_active_providers_list() -> list[str]:
     keys = get_app_api_keys()
     return [p for p in ["gemini", "openai", "anthropic", "llama"] if p in keys and keys[p]]
@@ -911,12 +938,18 @@ if st.session_state.step == "Home":
 </div>
 </div>
 """, unsafe_allow_html=True)
-        st.write("")
         if st.button("Explore Dynamic Data ➔", key="btn_choose_dynamic", type="secondary", use_container_width=True):
-            st.session_state.data_mode = "dynamic"
-            st.session_state.highest_step = max(st.session_state.highest_step, 1)
-            st.session_state.step = "Read Me"
-            st.rerun()
+            if is_running_locally() or bool(get_app_api_keys()):
+                st.session_state.data_mode = "dynamic"
+                st.session_state.highest_step = max(st.session_state.highest_step, 1)
+                st.session_state.step = "Read Me"
+                st.session_state.show_dynamic_cloud_info = False
+                st.rerun()
+            else:
+                st.session_state.show_dynamic_cloud_info = True
+
+        if st.session_state.get("show_dynamic_cloud_info"):
+            st.info("ℹ️ For dynamic workflow using your own API key, you need to visit https://github.com/google-research/nodesynth_ .")
 
 elif st.session_state.step == "Read Me":
     st.title("📖 User Guide: NodeSynth")
@@ -1146,6 +1179,7 @@ elif st.session_state.step == "Concept":
             if st.button("Generate Taxonomy (Simulated)", type="primary"):
                 st.session_state.saved_concept = st.session_state.target_concept
                 st.session_state.saved_countries = st.session_state.target_countries
+                st.session_state.saved_modality = st.session_state.get('modality', ["text-to-text", "text-to-video"])
                 with st.spinner("Generating Taxonomy (Simulated)..."):
                     time.sleep(1)
                     if st.session_state.target_concept == "Medical Advice":
@@ -1181,6 +1215,7 @@ elif st.session_state.step == "Concept":
 
                     st.session_state.saved_concept = domain
                     st.session_state.saved_countries = st.session_state.target_countries
+                    st.session_state.saved_modality = modal_val
                     st.session_state.active_tax_model = selected_tax_model
 
                     progress_bar = st.progress(0.0)
@@ -1494,7 +1529,7 @@ elif st.session_state.step == "Taxonomy":
                              not_found_title = paper_titles[0] if (paper_titles and paper_titles[0]) else "Could not find"
                              st.markdown(f"- 📄 *{not_found_title}*")
 
-                         if paper_content and paper_content not in ["Could not find", "None", ""]:
+                         if is_dynamic_mode and paper_content and paper_content not in ["Could not find", "None", ""]:
                              with st.expander("📑 Grounded Paper Context & Demographics", expanded=False):
                                  st.markdown(f"<div style='font-size:0.85rem; color:#475569; white-space:pre-wrap;'>{paper_content}</div>", unsafe_allow_html=True)
                      else:
@@ -1533,6 +1568,10 @@ elif st.session_state.step == "Taxonomy":
 elif st.session_state.step == "Data":
     concept_name = st.session_state.get('saved_concept', 'Medical Advice')
     regions = ', '.join(st.session_state.get('saved_countries', ['Global']))
+    user_modalities = st.session_state.get('saved_modality', st.session_state.get('modality', ['text-to-text', 'text-to-image', 'text-to-video']))
+    if isinstance(user_modalities, str):
+        user_modalities = [user_modalities]
+    modality_str = ', '.join(user_modalities) if user_modalities else 'All Modalities'
     st.markdown(f"""
 <div class="content-card" style="
     background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
@@ -1549,6 +1588,7 @@ elif st.session_state.step == "Data":
 <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">🌍 {regions}</span>
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">📌 {concept_name}</span>
+<span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">🎨 {modality_str}</span>
 </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1556,7 +1596,7 @@ elif st.session_state.step == "Data":
     df = st.session_state.demo_data
     if not df.empty:
         # --- Prepare working dataframe ---
-        cols_needed = ['Domain', 'level1', 'level2', 'level3', 'user_group', 'extracted_Country', 'prompts']
+        cols_needed = ['Domain', 'level1', 'level2', 'level3', 'user_group', 'extracted_Country', 'model_modality', 'prompts']
         for col in cols_needed:
             if col not in df.columns:
                 if col == 'Domain':
@@ -1565,6 +1605,8 @@ elif st.session_state.step == "Data":
                     df[col] = 'General Public'
                 elif col == 'extracted_Country':
                     df[col] = 'Global'
+                elif col == 'model_modality':
+                    df[col] = 'text-to-text'
                 elif col == 'prompts':
                     df[col] = df.get('level2', 'Topic').apply(lambda t: [f"Safety evaluation scenario for {t} in {concept_name}."])
                 else:
@@ -1590,8 +1632,15 @@ elif st.session_state.step == "Data":
         df_work['level1'] = df_work['level1'].astype(str)
         df_work['Domain'] = df_work['Domain'].astype(str)
         df_work['user_group'] = df_work['user_group'].astype(str)
+        df_work['model_modality'] = df_work['model_modality'].astype(str)
         df_work['prompts'] = df_work['prompts'].astype(str)
         df_work = df_work.dropna(subset=['prompts']).drop_duplicates(subset=['Domain', 'level1', 'level2', 'level3', 'prompts']).copy()
+
+        # Filter by modality selected on Concept page
+        if user_modalities:
+            df_modal_match = df_work[df_work['model_modality'].isin(user_modalities)]
+            if not df_modal_match.empty:
+                df_work = df_modal_match.copy()
         # Multi-signal complexity score
         def compute_complexity(text):
             text = str(text)
@@ -1794,12 +1843,13 @@ elif st.session_state.step == "Data":
 <h4 style="margin: 0; font-size: 12px; font-weight: 900; color: #334155; text-transform: uppercase; letter-spacing: 0.1em;">Data Inspector</h4>
 </div>
 """, unsafe_allow_html=True)
-        gt_df = df_work[['level2', 'level3', 'prompts', 'complexity', 'extracted_Country', 'Domain']].copy()
+        gt_df = df_work[['level2', 'level3', 'model_modality', 'prompts', 'complexity', 'extracted_Country', 'Domain']].copy()
 
         # Rename columns for spreadsheet appearance
-        display_df = gt_df[['level2', 'level3', 'prompts', 'complexity', 'extracted_Country', 'Domain']].rename(columns={
+        display_df = gt_df[['level2', 'level3', 'model_modality', 'prompts', 'complexity', 'extracted_Country', 'Domain']].rename(columns={
             'level2': 'L2 Subtopic',
             'level3': 'L3 Leaf',
+            'model_modality': 'Modality',
             'prompts': 'Synthetic Prompt',
             'complexity': 'Complexity Score',
             'extracted_Country': 'Country',
@@ -1809,19 +1859,24 @@ elif st.session_state.step == "Data":
         # --- Table Filters ---
         st.markdown('<div style="margin-top: 1rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;"><span style="color: #6366f1; font-size: 14px;">🔍</span><span style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Table Filters</span></div>', unsafe_allow_html=True)
         
-        col_f1, col_f2 = st.columns(2)
+        col_f1, col_f2, col_f3 = st.columns(3)
         with col_f1:
             l2_options = sorted(display_df['L2 Subtopic'].dropna().unique().tolist())
             selected_l2 = st.multiselect("L2 Subtopic", options=l2_options, placeholder="All Subtopics")
         with col_f2:
             l3_options = sorted(display_df['L3 Leaf'].dropna().unique().tolist())
             selected_l3 = st.multiselect("L3 Leaf", options=l3_options, placeholder="All L3 Leafs")
+        with col_f3:
+            mod_options = sorted(display_df['Modality'].dropna().unique().tolist())
+            selected_mod = st.multiselect("Modality", options=mod_options, placeholder="All Modalities")
 
         # Apply filters
         if selected_l2:
             display_df = display_df[display_df['L2 Subtopic'].isin(selected_l2)]
         if selected_l3:
             display_df = display_df[display_df['L3 Leaf'].isin(selected_l3)]
+        if selected_mod:
+            display_df = display_df[display_df['Modality'].isin(selected_mod)]
 
         # Action row for download button
         col_btn, _ = st.columns([1, 2])
@@ -1841,6 +1896,7 @@ elif st.session_state.step == "Data":
             use_container_width=True,
             height=600,
             column_config={
+                "Modality": st.column_config.TextColumn("Modality", width="small"),
                 "Synthetic Prompt": st.column_config.TextColumn("Synthetic Prompt", width="large"),
                 "Complexity Score": st.column_config.NumberColumn("Complexity Score", format="%.1f/10"),
             }
