@@ -2640,6 +2640,12 @@ elif st.session_state.step == "Analysis":
         if 'prompts' in df.columns:
             df['prompts'] = df['prompts'].apply(to_flat_string)
 
+        # Set Domain if missing or empty
+        if 'Domain' not in df.columns or df['Domain'].isna().all() or (df['Domain'].astype(str).str.strip().isin(['', 'None', 'nan'])).all():
+            concept = st.session_state.get('saved_concept', st.session_state.get('target_concept', ''))
+            if concept:
+                df['Domain'] = concept
+
         if demo_data is not None and not demo_data.empty:
             demo_copy = demo_data.copy()
             if 'prompts' in demo_copy.columns:
@@ -2647,11 +2653,11 @@ elif st.session_state.step == "Analysis":
                     demo_copy = demo_copy.explode('prompts')
                 demo_copy['prompts'] = demo_copy['prompts'].apply(to_flat_string)
 
-            for col in ['user_group', 'extracted_occupations', 'extracted_Demographics', 'extracted_Country', 'cleaned_Country', 'level1', 'level2', 'level3']:
+            for col in ['Domain', 'user_group', 'extracted_occupations', 'extracted_Demographics', 'extracted_Country', 'cleaned_Country', 'level1', 'level2', 'level3']:
                 if col in demo_copy.columns:
                     demo_copy[col] = demo_copy[col].apply(to_flat_string)
 
-            lookup_cols = ['prompts', 'level1', 'level2', 'level3', 'user_group', 'extracted_occupations', 'extracted_Demographics', 'extracted_Country', 'cleaned_Country']
+            lookup_cols = ['prompts', 'Domain', 'level1', 'level2', 'level3', 'user_group', 'extracted_occupations', 'extracted_Demographics', 'extracted_Country', 'cleaned_Country']
             avail_cols = [c for c in lookup_cols if c in demo_copy.columns]
             if avail_cols and 'prompts' in avail_cols:
                 meta_subset = demo_copy[avail_cols].drop_duplicates(subset=['prompts'])
@@ -3181,17 +3187,118 @@ elif st.session_state.step == "Analysis":
                           "she", "they", "them", "this", "that", "these", "those", "im", "dont",
                           "ive", "how", "what", "about", "just", "want", "know", "like"}
 
+            # ── Domain Phrase & Keyword Removal ───────────────────────────────
+            # Dynamically identify active domain(s) and filter the domain name itself
+            # (e.g. "hate speech", "hatespeech", "medical advice", etc.) so top bi-grams
+            # highlight actionable risk themes rather than the domain title itself.
+            domain_candidates = set()
+            if "Domain" in df_med_plot_cleaned.columns:
+                for d in df_med_plot_cleaned["Domain"].dropna().unique():
+                    if str(d).strip():
+                        domain_candidates.add(str(d).strip())
+            for key in ("saved_concept", "target_concept", "concept_selector", "custom_domain", "active_concept"):
+                val = st.session_state.get(key)
+                if val and str(val).strip() and str(val).strip() != "Custom Domain":
+                    domain_candidates.add(str(val).strip())
+
+            # Presets covering common variations, plurals, and compounds
+            preset_domain_phrases = {
+                "hate speech": {
+                    "hate speech", "hatespeech", "hate speeches", "hatespeeches", "hate speechs",
+                },
+                "medical": {
+                    "medical advice", "medical opinion", "medical suggestions", "medical suggestion",
+                    "medical opinions", "medical or medical opinion or suggestions",
+                },
+                "cultural representation": {
+                    "cultural representation", "cultural representations", "culture representation",
+                },
+                "public health": {
+                    "public health and safety", "public health", "public safety", "health safety", "health and safety",
+                },
+            }
+
+            domain_phrases = set()
+            domain_words = set()
+            compound_domain_words = set()
+
+            for cand in domain_candidates:
+                c_lower = str(cand).lower().strip()
+                if not c_lower:
+                    continue
+                c_clean = re.sub(r"[^\w\s]", " ", c_lower).strip()
+                c_single = " ".join(c_clean.split())
+                if c_single:
+                    domain_phrases.add(c_single)
+                    domain_phrases.add(c_single + "s")
+                    closed = c_single.replace(" ", "")
+                    domain_phrases.add(closed)
+                    domain_phrases.add(closed + "s")
+                    if len(closed) > 2:
+                        compound_domain_words.add(closed)
+                        compound_domain_words.add(closed + "s")
+
+                for key, p_set in preset_domain_phrases.items():
+                    if key in c_lower or c_lower in key:
+                        domain_phrases.update(p_set)
+                        for p in p_set:
+                            closed_p = p.replace(" ", "")
+                            if len(closed_p) > 2 and " " not in p:
+                                compound_domain_words.add(closed_p)
+
+                parts = re.split(r"\b(?:or|and)\b|[/,]", c_lower)
+                for part in parts:
+                    p_strip = " ".join(re.sub(r"[^\w\s]", " ", part).strip().split())
+                    if len(p_strip.split()) >= 2:
+                        domain_phrases.add(p_strip)
+                        domain_phrases.add(p_strip + "s")
+                        cl = p_strip.replace(" ", "")
+                        domain_phrases.add(cl)
+                        if len(cl) > 2:
+                            compound_domain_words.add(cl)
+
+                for w in c_clean.split():
+                    if w not in {"and", "or", "the", "of", "in", "for", "to"} and len(w) > 2:
+                        domain_words.add(w)
+                        domain_words.add(w + "s")
+
+            for p in list(domain_phrases):
+                domain_phrases.add(p + "es")
+                domain_phrases.add(p + "ing")
+
+            sorted_domain_phrases = sorted(domain_phrases, key=len, reverse=True)
+
+            if domain_candidates:
+                domain_disp = ", ".join(f"'{d}'" for d in sorted(domain_candidates)[:2])
+                st.caption(f"💡 *Domain name terms ({domain_disp}) are automatically excluded from bi-grams to surface specific failure patterns.*")
+
             def get_model_ngrams(df, model, text_column="prompts", n=2, top_k=10, only_fails=True):
-                if only_fails:
+                target_col = text_column if text_column in df.columns else ("query" if "query" in df.columns else df.columns[0])
+                if only_fails and "Binary Safety Status" in df.columns:
                     df_target = df[(df["Model"] == model) & (df["Binary Safety Status"] == "No Disclosure")]
                 else:
                     df_target = df[df["Model"] == model]
-                words = []
-                for text in df_target[text_column].dropna():
-                    clean = re.sub(r"[^\w\s]", "", str(text).lower())
-                    tokens = [t for t in clean.split() if t not in stop_words and len(t) > 2]
-                    words.extend(tokens)
-                ngrams = [" ".join(words[i:i + n]) for i in range(len(words) - n + 1)]
+
+                ngrams = []
+                for text in df_target[target_col].dropna():
+                    t = str(text).lower()
+                    # Normalize hyphens and slashes to spaces
+                    t = re.sub(r"[-_/]", " ", t)
+                    # Strip out domain phrases (e.g. "hate speech", "medical advice")
+                    for dp in sorted_domain_phrases:
+                        if dp and len(dp) > 2:
+                            t = re.sub(r"\b" + re.escape(dp) + r"\b", " ", t)
+                    clean = re.sub(r"[^\w\s]", " ", t)
+                    tokens = [w for w in clean.split() if w not in stop_words and w not in compound_domain_words and len(w) > 2]
+                    # Compute n-grams per individual prompt (avoiding artificial cross-prompt ngrams)
+                    for i in range(len(tokens) - n + 1):
+                        ngram = " ".join(tokens[i:i + n])
+                        # Discard exact domain phrases or ngrams formed entirely of domain words
+                        if ngram in domain_phrases:
+                            continue
+                        if all(w in domain_words for w in ngram.split()):
+                            continue
+                        ngrams.append(ngram)
                 return Counter(ngrams).most_common(top_k)
 
             models = sorted(df_med_plot_cleaned["Model"].unique())

@@ -1237,6 +1237,7 @@ class ModelEvaluationGenerator:
                 metadata={
                     "query": p_text,
                     "target_model": display_model_name,
+                    "Domain": str(row.get("Domain", "")),
                     "level1": str(row.get("level1", "General")),
                     "level2": str(row.get("level2", "General")),
                     "level3": str(row.get("level3", "General")),
@@ -1262,6 +1263,7 @@ class ModelEvaluationGenerator:
                 "query": meta["query"],
                 "response": response_text,
                 "target_model": meta["target_model"],
+                "Domain": meta.get("Domain", ""),
                 "level1": meta.get("level1", ""),
                 "level2": meta.get("level2", ""),
                 "level3": meta.get("level3", ""),
