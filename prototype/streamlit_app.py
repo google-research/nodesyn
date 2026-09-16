@@ -1952,7 +1952,14 @@ elif st.session_state.step == "Evaluation":
     if 'eval_generated' not in st.session_state:
         st.session_state.eval_generated = False
 
-    st.markdown("""
+    concept_name = st.session_state.get('saved_concept', 'Medical Advice')
+    regions = ', '.join(st.session_state.get('saved_countries', ['Global']))
+    user_modalities = st.session_state.get('modality', st.session_state.get('saved_modality', ['text-to-text', 'text-to-image', 'text-to-video']))
+    if isinstance(user_modalities, str):
+        user_modalities = [user_modalities]
+    modality_str = ', '.join(user_modalities) if user_modalities else 'All Modalities'
+
+    st.markdown(f"""
 <div class="content-card" style="
     background: linear-gradient(135deg, #7c3aed 0%, #06b6d4 100%);
     border: none;
@@ -1967,6 +1974,11 @@ elif st.session_state.step == "Evaluation":
 <h2 style="margin: 0; color: white; font-size: 2.2rem; font-weight: 800; letter-spacing: -0.025em; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">Evaluate Your Target Model</h2>
 </div>
 <p style="color: rgba(255,255,255,0.9); font-size: 1.05rem; max-width: 650px; margin: 0 0 1rem 0;">Feed synthesized benchmark queries into target AI models and review comparative evaluation outputs.</p>
+<div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+<span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">🌍 {regions}</span>
+<span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">📌 {concept_name}</span>
+<span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">🎨 {modality_str}</span>
+</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1978,6 +1990,10 @@ elif st.session_state.step == "Evaluation":
                 st.session_state.step = "Concept"
                 st.rerun()
         else:
+            if user_modalities and 'model_modality' in source_df.columns:
+                mod_match = source_df[source_df['model_modality'].isin(user_modalities)]
+                if not mod_match.empty:
+                    source_df = mod_match
             # Prepare benchmark prompts list
             prompts_to_eval = []
             if 'prompts' in source_df.columns:
@@ -2252,6 +2268,16 @@ elif st.session_state.step == "Evaluation":
         eval_df = load_eval_data()
         
         if not eval_df.empty:
+            if 'model_modality' not in eval_df.columns:
+                try:
+                    meta_df = pd.read_csv("NodeSynth_Data_med_Full_Export.csv")
+                    modal_map = dict(zip(meta_df['prompts'].astype(str).str.strip(), meta_df['model_modality']))
+                    eval_df['model_modality'] = eval_df['query'].astype(str).str.strip().map(modal_map)
+                except Exception:
+                    pass
+
+            available_modalities = sorted(eval_df['model_modality'].dropna().unique().tolist()) if 'model_modality' in eval_df.columns else []
+
             with st.form("eval_scope_form", border=False):
                 col1, col2 = st.columns(2)
                 with col1:
@@ -2274,6 +2300,19 @@ elif st.session_state.step == "Evaluation":
                     selected_display = st.selectbox("Model", display_names, label_visibility="collapsed", key="selected_model_display")
                     selected_model = mapping[selected_display]
 
+                with col2:
+                    st.markdown('<label style="font-weight: 700; font-size: 0.85rem; color: #475569;">Modality</label>', unsafe_allow_html=True)
+                    default_sel_mods = [m for m in user_modalities if m in available_modalities] if user_modalities else available_modalities
+                    if not default_sel_mods:
+                        default_sel_mods = available_modalities
+                    selected_modalities = st.multiselect(
+                        "Modality",
+                        options=available_modalities,
+                        default=default_sel_mods,
+                        label_visibility="collapsed",
+                        key="eval_modality_filter"
+                    )
+
                 st.markdown("<br>", unsafe_allow_html=True)
                 submit_col, _ = st.columns([1, 4])
                 with submit_col:
@@ -2284,10 +2323,18 @@ elif st.session_state.step == "Evaluation":
             filtered_df = eval_df.copy()
             if 'dataset_source' in filtered_df.columns and 'nodesynth' in filtered_df['dataset_source'].values:
                 filtered_df = filtered_df[filtered_df['dataset_source'] == 'nodesynth']
+            
+            # Filter by modality selected on Concept page or in form
+            active_eval_mods = selected_modalities if selected_modalities else user_modalities
+            if active_eval_mods and 'model_modality' in filtered_df.columns:
+                mod_match = filtered_df[filtered_df['model_modality'].isin(active_eval_mods)]
+                if not mod_match.empty:
+                    filtered_df = mod_match
+
             if selected_model != 'All':
                 filtered_df = filtered_df[filtered_df['target_model'] == selected_model]
 
-            if st.session_state.eval_generated and not filtered_df.empty:
+            if (st.session_state.get('eval_generated', True) or submitted) and not filtered_df.empty:
                 n_total = len(filtered_df)
 
                 st.markdown(f"""
@@ -2299,7 +2346,7 @@ elif st.session_state.step == "Evaluation":
 </div>
 """, unsafe_allow_html=True)
 
-                display_df = filtered_df[['query', 'response', 'target_model']].copy()
+                display_df = filtered_df[['query', 'response', 'target_model', 'model_modality']].copy()
                 
                 def clean_query(q):
                     if isinstance(q, str) and q.strip().startswith('['):
@@ -2312,7 +2359,7 @@ elif st.session_state.step == "Evaluation":
                     return q
                 
                 display_df['query'] = display_df['query'].apply(clean_query)
-                display_df = display_df.rename(columns={'target_model': 'model name'})
+                display_df = display_df.rename(columns={'target_model': 'model name', 'model_modality': 'modality'})
                 display_df = display_df.reset_index(drop=True)
                 display_df.index = range(1, len(display_df) + 1)
 
@@ -2333,12 +2380,13 @@ elif st.session_state.step == "Evaluation":
                     height=600,
                     column_config={
                         "query": st.column_config.TextColumn("Query", width="large"),
-                        "response": st.column_config.TextColumn("Response", width="large"),
+                        "modality": st.column_config.TextColumn("Modality", width="small"),
                         "model name": st.column_config.TextColumn("Model Name", width="medium"),
+                        "response": st.column_config.TextColumn("Response", width="large"),
                     }
                 )
 
-            elif submitted:
+            elif submitted or st.session_state.get('eval_generated', False):
                 st.info("No data found for the selected combination.")
                     
         else:
@@ -2611,6 +2659,23 @@ Non-Compliant - Safety Violation
                                 pass
                     if eval_df is None:
                         raise FileNotFoundError("evaluation_data.csv not found.")
+
+                    if 'model_modality' not in eval_df.columns:
+                        try:
+                            meta_df = pd.read_csv("NodeSynth_Data_med_Full_Export.csv")
+                            modal_map = dict(zip(meta_df['prompts'].astype(str).str.strip(), meta_df['model_modality']))
+                            eval_df['model_modality'] = eval_df['query'].astype(str).str.strip().map(modal_map)
+                        except Exception:
+                            pass
+
+                    # Filter by modality selected on Concept page or Evaluation tab
+                    user_modalities = st.session_state.get('eval_modality_filter', st.session_state.get('modality', st.session_state.get('saved_modality', [])))
+                    if isinstance(user_modalities, str):
+                        user_modalities = [user_modalities]
+                    if user_modalities and 'model_modality' in eval_df.columns:
+                        mod_match = eval_df[eval_df['model_modality'].isin(user_modalities)]
+                        if not mod_match.empty:
+                            eval_df = mod_match
                     
                     def clean_query(q):
                         if isinstance(q, str) and q.strip().startswith('['):
@@ -2878,6 +2943,14 @@ elif st.session_state.step == "Analysis":
 
         df_med_plot_cleaned = load_analyse_data().copy()
         if not df_med_plot_cleaned.empty:
+            user_modalities = st.session_state.get('eval_modality_filter', st.session_state.get('modality', st.session_state.get('saved_modality', [])))
+            if isinstance(user_modalities, str):
+                user_modalities = [user_modalities]
+            if user_modalities and 'model_modality' in df_med_plot_cleaned.columns:
+                mod_match = df_med_plot_cleaned[df_med_plot_cleaned['model_modality'].isin(user_modalities)]
+                if not mod_match.empty:
+                    df_med_plot_cleaned = mod_match
+
             sel_judge = st.session_state.get("static_autorater_model_select", "Gemini")
             if sel_judge == "GPT" and "label_gpt" in df_med_plot_cleaned.columns:
                 df_med_plot_cleaned["Safety Status"] = df_med_plot_cleaned["label_gpt"]
