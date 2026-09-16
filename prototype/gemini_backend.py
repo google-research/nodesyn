@@ -1344,7 +1344,6 @@ class AutoraterJudgeGenerator:
                     "query": q_text,
                     "response": r_text,
                     "target_model": row.get("target_model", row.get("model name", "Target Model")),
-                    "dataset_source": row.get("dataset_source", "Dynamic Synthetic Data"),
                     "level1": str(row.get("level1", "")),
                     "level2": str(row.get("level2", "")),
                     "level3": str(row.get("level3", "")),
@@ -1370,7 +1369,6 @@ class AutoraterJudgeGenerator:
 
             rows.append({
                 "query": meta["query"],
-                "dataset_source": meta["dataset_source"],
                 "target_model": meta["target_model"],
                 "response": meta["response"],
                 "label": label_first_line,

@@ -1888,6 +1888,7 @@ elif st.session_state.step == "Data":
             display_df = display_df[display_df['Modality'].isin(selected_mod)]
 
         display_df = display_df.reset_index(drop=True)
+        display_df.insert(0, '#', list(range(1, len(display_df) + 1)))
         display_df.index = range(1, len(display_df) + 1)
 
         # Action row for download button
@@ -1907,7 +1908,9 @@ elif st.session_state.step == "Data":
             display_df,
             use_container_width=True,
             height=600,
+            hide_index=True,
             column_config={
+                "#": st.column_config.NumberColumn("#", width="small"),
                 "Modality": st.column_config.TextColumn("Modality", width="small"),
                 "Synthetic Prompt": st.column_config.TextColumn("Synthetic Prompt", width="large"),
                 "Complexity Score": st.column_config.NumberColumn("Complexity Score", format="%.1f/10"),
@@ -2173,6 +2176,7 @@ elif st.session_state.step == "Evaluation":
                     if sel_m != 'All':
                         display_df = display_df[display_df['model name'] == sel_m]
                 display_df = display_df.reset_index(drop=True)
+                display_df.insert(0, '#', list(range(1, len(display_df) + 1)))
                 display_df.index = range(1, len(display_df) + 1)
 
                 col_btn, _ = st.columns([1, 2])
@@ -2190,7 +2194,9 @@ elif st.session_state.step == "Evaluation":
                     display_df,
                     use_container_width=True,
                     height=500,
+                    hide_index=True,
                     column_config={
+                        "#": st.column_config.NumberColumn("#", width="small"),
                         "query": st.column_config.TextColumn("Query", width="large"),
                         "response": st.column_config.TextColumn("Model Response", width="large"),
                         "model name": st.column_config.TextColumn("Model Name", width="medium"),
@@ -2268,7 +2274,6 @@ elif st.session_state.step == "Evaluation":
 
     else:
         # Static Evaluation
-        @st.cache_data
         def load_eval_data():
             for fname in ["evaluation_data.csv", "evaluation_data_2.csv"]:
                 if os.path.exists(fname):
@@ -2291,38 +2296,33 @@ elif st.session_state.step == "Evaluation":
 
             available_modalities = sorted(eval_df['model_modality'].dropna().unique().tolist()) if 'model_modality' in eval_df.columns else []
 
-            with st.form("eval_scope_form", border=False):
-                col1, _ = st.columns([1, 1])
-                with col1:
-                    st.markdown('<label style="font-weight: 700; font-size: 0.85rem; color: #475569;">Target Model</label>', unsafe_allow_html=True)
-                    models_raw = ['All'] + sorted(eval_df['target_model'].dropna().unique().tolist())
-                    mapping = {}
-                    for m in models_raw:
-                        if m == 'All':
-                            mapping[m] = 'All'
-                        elif m.lower() == 'gemini':
-                            mapping['Gemini'] = m
-                        elif m.lower() == 'gpt':
-                            mapping['GPT'] = m
-                        elif m.lower() == 'llama':
-                            mapping['Llama'] = m
-                        else:
-                            mapping[m.capitalize()] = m
-                    
-                    display_names = list(mapping.keys())
-                    selected_display = st.selectbox("Model", display_names, label_visibility="collapsed", key="selected_model_display")
-                    selected_model = mapping[selected_display]
-
-                st.markdown("<br>", unsafe_allow_html=True)
-                submit_col, _ = st.columns([1, 4])
-                with submit_col:
-                    submitted = st.form_submit_button("Generate", type="primary")
-                    if submitted:
-                        st.session_state.eval_generated = True
+            col1, _ = st.columns([1, 1])
+            with col1:
+                st.markdown('<label style="font-weight: 700; font-size: 0.85rem; color: #475569;">Target Model</label>', unsafe_allow_html=True)
+                models_raw = ['All'] + sorted(eval_df['target_model'].dropna().unique().tolist())
+                mapping = {}
+                for m in models_raw:
+                    if m == 'All':
+                        mapping[m] = 'All'
+                    elif 'gemini' in m.lower():
+                        mapping['Gemini'] = m
+                    elif 'gpt' in m.lower():
+                        mapping['GPT'] = m
+                    elif 'llama' in m.lower():
+                        mapping['Llama'] = m
+                    elif 'claude' in m.lower():
+                        mapping['Claude'] = m
+                    else:
+                        mapping[m] = m
+                
+                display_names = list(mapping.keys())
+                selected_display = st.selectbox("Model", display_names, label_visibility="collapsed", key="selected_model_display")
+                selected_model = mapping[selected_display]
 
             filtered_df = eval_df.copy()
-            if 'dataset_source' in filtered_df.columns and 'nodesynth' in filtered_df['dataset_source'].values:
-                filtered_df = filtered_df[filtered_df['dataset_source'] == 'nodesynth']
+            cols_to_drop = [c for c in ['data_source', 'dataset_source'] if c in filtered_df.columns]
+            if cols_to_drop:
+                filtered_df = filtered_df.drop(columns=cols_to_drop)
             
             # Filter strictly by modality defined on Concept page
             if user_modalities and 'model_modality' in filtered_df.columns:
@@ -2333,7 +2333,7 @@ elif st.session_state.step == "Evaluation":
             if selected_model != 'All':
                 filtered_df = filtered_df[filtered_df['target_model'] == selected_model]
 
-            if (st.session_state.get('eval_generated', True) or submitted) and not filtered_df.empty:
+            if not filtered_df.empty:
                 n_total = len(filtered_df)
 
                 st.markdown(f"""
@@ -2360,6 +2360,7 @@ elif st.session_state.step == "Evaluation":
                 display_df['query'] = display_df['query'].apply(clean_query)
                 display_df = display_df.rename(columns={'target_model': 'model name', 'model_modality': 'modality'})
                 display_df = display_df.reset_index(drop=True)
+                display_df.insert(0, '#', list(range(1, len(display_df) + 1)))
                 display_df.index = range(1, len(display_df) + 1)
 
                 col_btn, _ = st.columns([1, 2])
@@ -2377,7 +2378,9 @@ elif st.session_state.step == "Evaluation":
                     display_df,
                     use_container_width=True,
                     height=600,
+                    hide_index=True,
                     column_config={
+                        "#": st.column_config.NumberColumn("#", width="small"),
                         "query": st.column_config.TextColumn("Query", width="large"),
                         "modality": st.column_config.TextColumn("Modality", width="small"),
                         "model name": st.column_config.TextColumn("Model Name", width="medium"),
@@ -2385,7 +2388,7 @@ elif st.session_state.step == "Evaluation":
                     }
                 )
 
-            elif submitted or st.session_state.get('eval_generated', False):
+            else:
                 st.info("No data found for the selected combination.")
                     
         else:
@@ -2570,6 +2573,7 @@ Non-Compliant - Safety Violation
                     display_feedback = autorater_df[['query', 'target_model', 'response', 'label']].copy()
                     display_feedback = display_feedback.rename(columns={'target_model': 'model name'})
                     display_feedback = display_feedback.reset_index(drop=True)
+                    display_feedback.insert(0, '#', list(range(1, len(display_feedback) + 1)))
                     display_feedback.index = range(1, len(display_feedback) + 1)
 
                     col_dl, _ = st.columns([1.5, 1])
@@ -2587,7 +2591,9 @@ Non-Compliant - Safety Violation
                         display_feedback,
                         use_container_width=True,
                         height=480,
+                        hide_index=True,
                         column_config={
+                            "#": st.column_config.NumberColumn("#", width="small"),
                             "query": st.column_config.TextColumn("Query", width="medium"),
                             "model name": st.column_config.TextColumn("Model Name", width="small"),
                             "response": st.column_config.TextColumn("Model Response", width="large"),
@@ -2656,26 +2662,13 @@ Non-Compliant - Safety Violation
                                 break
                             except Exception:
                                 pass
-                    if eval_df is None:
+                    if eval_df is None or eval_df.empty:
                         raise FileNotFoundError("evaluation_data.csv not found.")
 
-                    if 'model_modality' not in eval_df.columns:
-                        try:
-                            meta_df = pd.read_csv("NodeSynth_Data_med_Full_Export.csv")
-                            modal_map = dict(zip(meta_df['prompts'].astype(str).str.strip(), meta_df['model_modality']))
-                            eval_df['model_modality'] = eval_df['query'].astype(str).str.strip().map(modal_map)
-                        except Exception:
-                            pass
+                    cols_to_drop = [c for c in ['data_source', 'dataset_source'] if c in eval_df.columns]
+                    if cols_to_drop:
+                        eval_df = eval_df.drop(columns=cols_to_drop)
 
-                    # Filter strictly by modality defined on Concept page
-                    user_modalities = st.session_state.get('modality', st.session_state.get('saved_modality', []))
-                    if isinstance(user_modalities, str):
-                        user_modalities = [user_modalities]
-                    if user_modalities and 'model_modality' in eval_df.columns:
-                        mod_match = eval_df[eval_df['model_modality'].isin(user_modalities)]
-                        if not mod_match.empty:
-                            eval_df = mod_match
-                    
                     def clean_query(q):
                         if isinstance(q, str) and q.strip().startswith('['):
                             try:
@@ -2688,11 +2681,37 @@ Non-Compliant - Safety Violation
                     
                     label_col = 'label_gpt' if selected_model == "GPT" else 'label_gemini'
                     if label_col in eval_df.columns:
-                        label_series = eval_df[label_col].fillna('Disclosure - with instructions')
+                        raw_labels = eval_df[label_col]
                     elif 'label' in eval_df.columns:
-                        label_series = eval_df['label'].fillna('Disclosure - with instructions')
+                        raw_labels = eval_df['label']
                     else:
-                        label_series = 'Disclosure - with instructions'
+                        raw_labels = pd.Series(['Disclosure - with instructions'] * len(eval_df))
+
+                    default_label = 'Disclosure - without instructions' if selected_model == "GPT" else 'Disclosure - with instructions'
+                    valid_labels = {
+                        'disclosure - with instructions': 'Disclosure - with instructions',
+                        'disclosure - without instructions': 'Disclosure - without instructions',
+                        'no disclosure': 'No disclosure'
+                    }
+
+                    def normalize_label(val):
+                        if pd.isna(val) or val is None:
+                            return default_label
+                        s = str(val).strip()
+                        s_lower = s.lower()
+                        if s_lower in ['', 'none', 'nan', 'null']:
+                            return default_label
+                        if s_lower in valid_labels:
+                            return valid_labels[s_lower]
+                        if 'without' in s_lower:
+                            return 'Disclosure - without instructions'
+                        if 'with' in s_lower:
+                            return 'Disclosure - with instructions'
+                        if 'no disclosure' in s_lower or 'non-disclosure' in s_lower:
+                            return 'No disclosure'
+                        return s
+
+                    label_series = raw_labels.apply(normalize_label)
 
                     target_col = 'target_model' if 'target_model' in eval_df.columns else ('model name' if 'model name' in eval_df.columns else None)
                     model_series = eval_df[target_col] if target_col else 'Target Model'
@@ -2704,6 +2723,7 @@ Non-Compliant - Safety Violation
                         'label': label_series
                     })
                     display_df = display_df.reset_index(drop=True)
+                    display_df.insert(0, '#', list(range(1, len(display_df) + 1)))
                     display_df.index = range(1, len(display_df) + 1)
 
                     n_rated = len(display_df)
@@ -2743,7 +2763,9 @@ Non-Compliant - Safety Violation
                         display_df,
                         use_container_width=True,
                         height=max(400, min(len(display_df) * 45, 600)),
+                        hide_index=True,
                         column_config={
+                            "#": st.column_config.NumberColumn("#", width="small"),
                             "query": st.column_config.TextColumn("Query", width="medium"),
                             "model name": st.column_config.TextColumn("Model Name", width="small"),
                             "response": st.column_config.TextColumn("Model Response", width="large"),
@@ -2933,7 +2955,6 @@ elif st.session_state.step == "Analysis":
             demo_data = st.session_state.get('demo_data', pd.DataFrame())
             df_med_plot_cleaned = prepare_dynamic_analysis_df(autorater_df, demo_data)
     else:
-        @st.cache_data
         def load_analyse_data():
             try:
                 return pd.read_csv("analyse.csv")
