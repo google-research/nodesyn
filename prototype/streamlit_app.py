@@ -1726,11 +1726,12 @@ elif st.session_state.step == "Data":
                 hovertemplate='%{y} • %{x}: %{z} prompts<extra></extra>',
                 showscale=False
             ))
+            coverage_axis_font = dict(family="'Inter', sans-serif", size=14, color='#334155')
             fig_heat.update_layout(
                 title=dict(text="DIVERSITY COVERAGE MATRIX", font=dict(size=13, color='#334155')),
-                xaxis=dict(tickangle=-45, tickfont=dict(family="'Inter', sans-serif", size=12, color='#334155')),
-                yaxis=dict(tickfont=dict(family="'Inter', sans-serif", size=12, color='#334155'), autorange='reversed'),
-                height=500, margin=dict(l=120, r=20, t=60, b=120),
+                xaxis=dict(tickangle=-45, tickfont=coverage_axis_font),
+                yaxis=dict(tickfont=coverage_axis_font, autorange='reversed'),
+                height=520, margin=dict(l=140, r=20, t=60, b=140),
                 paper_bgcolor='white', plot_bgcolor='white',
                 font_family="'Inter', sans-serif"
             )
@@ -1762,10 +1763,11 @@ elif st.session_state.step == "Data":
                 text=scatter_df['prompts'].astype(str).str[:80] + '...',
                 hovertemplate='<b>Length:</b> %{x} chars<br><b>Complexity:</b> %{y}/10<br><i>%{text}</i><extra></extra>'
             ))
+            linguistic_axis_title_font = dict(family="'Inter', sans-serif", size=14, color='#334155')
             fig_scatter.update_layout(
                 title=dict(text="LINGUISTIC QUALITY", font=dict(size=13, color='#334155')),
-                xaxis=dict(title='Prompt Length (chars)', gridcolor='#e2e8f0'),
-                yaxis=dict(title='Complexity Score', range=[0, 10.5], gridcolor='#e2e8f0'),
+                xaxis=dict(title=dict(text='Prompt Length (chars)', font=linguistic_axis_title_font), tickfont=dict(family="'Inter', sans-serif", size=12, color='#64748b'), gridcolor='#e2e8f0'),
+                yaxis=dict(title=dict(text='Complexity Score', font=linguistic_axis_title_font), tickfont=dict(family="'Inter', sans-serif", size=12, color='#64748b'), range=[0, 10.5], gridcolor='#e2e8f0'),
                 height=500, paper_bgcolor='white', plot_bgcolor='#f8fafc',
                 font_family="'Inter', sans-serif",
                 margin=dict(l=60, r=20, t=60, b=60)
