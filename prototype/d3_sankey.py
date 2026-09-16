@@ -117,10 +117,21 @@ const lightColors={json.dumps(light_colors)};
 const filterCfg={json.dumps(filters)};
 const levelLabels={json.dumps({c: c.replace('cleaned_Country','Country').replace('level','L').replace('user_group','User Group').replace('Domain','Domain') for c in flow_cols})};
 const scale = {scale_factor};
-const W = Math.max(document.documentElement.clientWidth - 20, 800) * scale;
+const W = Math.max(document.documentElement.clientWidth - 20, 1500) * scale;
 const H = {height} * scale;
-const mg={{top:8,right:150,bottom:8,left:8}};
+const mg={{top:8,right:180,bottom:8,left:12}};
 let activeFilters={{}};
+
+function takesMoreThan2Lines(text, maxChars = 22) {{
+  const words = String(text || '').split(/\\s+/);
+  let lines = 1, curLen = 0;
+  for (const w of words) {{
+    if (curLen === 0) {{ curLen = w.length; }}
+    else if (curLen + 1 + w.length <= maxChars) {{ curLen += 1 + w.length; }}
+    else {{ lines++; curLen = w.length; }}
+  }}
+  return lines > 2;
+}}
 
 /* Build filter dropdowns */
 const fd=document.getElementById('filters');
@@ -197,15 +208,15 @@ function render(){{
 
   /* Labels via foreignObject — positioned relative to group */
   const labels=ng.append('foreignObject')
-    .attr('x',d=>d.x0<W/2?d.x1-d.x0+6:-136)
+    .attr('x',d=>d.x0<W/2?d.x1-d.x0+8:-172)
     .attr('y',d=>(d.y1-d.y0)/2-18)
-    .attr('width',130).attr('height',40);
+    .attr('width',165).attr('height',40);
   labels.append('xhtml:div').attr('class','node-label')
     .style('text-align',d=>d.x0<W/2?'left':'right')
     .style('display','flex').style('align-items','center')
     .style('height','100%')
     .style('justify-content',d=>d.x0<W/2?'flex-start':'flex-end')
-    .text(d=>d.name);
+    .text(d=>takesMoreThan2Lines(d.name) ? '' : d.name);
 
   /* Helper: move a node group to its current y0 position */
   function applyTransform(sel, animate){{

@@ -949,7 +949,7 @@ if st.session_state.step == "Home":
                 st.session_state.show_dynamic_cloud_info = True
 
         if st.session_state.get("show_dynamic_cloud_info"):
-            st.info("ℹ️ For dynamic workflow using your own API key, you need to visit https://github.com/google-research/nodesynth_ .")
+            st.info("ℹ️ For dynamic workflow using your own API key, you need to visit https://github.com/google-research/nodesynth_ .\n\nDue to security reasons, dynamic flow powered by API keys is not supported. Please setup the webapp locally using the instructions mentioned in the Google Research repo.")
 
 elif st.session_state.step == "Read Me":
     st.title("📖 User Guide: NodeSynth")
@@ -1264,7 +1264,7 @@ elif st.session_state.step == "Taxonomy":
 ">
 <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.75rem;">
 <div style="background: rgba(255,255,255,0.2); border-radius: 12px; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;">
-<span style="font-size: 1.5rem;">🕸️</span>
+<span style="font-size: 1.5rem;">🌳</span>
 </div>
 <h2 style="margin: 0; color: white; font-size: 2rem; font-weight: 800; letter-spacing: -0.025em; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">Refine Taxonomy</h2>
 </div>
@@ -1728,8 +1728,8 @@ elif st.session_state.step == "Data":
             ))
             fig_heat.update_layout(
                 title=dict(text="DIVERSITY COVERAGE MATRIX", font=dict(size=13, color='#334155')),
-                xaxis=dict(tickangle=-45, tickfont=dict(size=10, color='#64748b')),
-                yaxis=dict(tickfont=dict(size=11, color='#475569'), autorange='reversed'),
+                xaxis=dict(tickangle=-45, tickfont=dict(family="'Inter', sans-serif", size=12, color='#334155')),
+                yaxis=dict(tickfont=dict(family="'Inter', sans-serif", size=12, color='#334155'), autorange='reversed'),
                 height=500, margin=dict(l=120, r=20, t=60, b=120),
                 paper_bgcolor='white', plot_bgcolor='white',
                 font_family="'Inter', sans-serif"
@@ -1852,10 +1852,11 @@ elif st.session_state.step == "Data":
 <h4 style="margin: 0; font-size: 12px; font-weight: 900; color: #334155; text-transform: uppercase; letter-spacing: 0.1em;">Data Inspector</h4>
 </div>
 """, unsafe_allow_html=True)
-        gt_df = df_work[['level2', 'level3', 'model_modality', 'prompts', 'complexity', 'extracted_Country', 'Domain']].copy()
+        gt_df = df_work[['level1', 'level2', 'level3', 'model_modality', 'prompts', 'complexity', 'extracted_Country', 'Domain']].copy()
 
         # Rename columns for spreadsheet appearance
-        display_df = gt_df[['level2', 'level3', 'model_modality', 'prompts', 'complexity', 'extracted_Country', 'Domain']].rename(columns={
+        display_df = gt_df[['level1', 'level2', 'level3', 'model_modality', 'prompts', 'complexity', 'extracted_Country', 'Domain']].rename(columns={
+            'level1': 'L1 Category',
             'level2': 'L2 Subtopic',
             'level3': 'L3 Leaf',
             'model_modality': 'Modality',
@@ -1868,18 +1869,23 @@ elif st.session_state.step == "Data":
         # --- Table Filters ---
         st.markdown('<div style="margin-top: 1rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;"><span style="color: #6366f1; font-size: 14px;">🔍</span><span style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Table Filters</span></div>', unsafe_allow_html=True)
         
-        col_f1, col_f2, col_f3 = st.columns(3)
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
+            l1_options = sorted(display_df['L1 Category'].dropna().unique().tolist())
+            selected_l1 = st.multiselect("L1 Category", options=l1_options, placeholder="All L1 Categories")
+        with col_f2:
             l2_options = sorted(display_df['L2 Subtopic'].dropna().unique().tolist())
             selected_l2 = st.multiselect("L2 Subtopic", options=l2_options, placeholder="All Subtopics")
-        with col_f2:
+        with col_f3:
             l3_options = sorted(display_df['L3 Leaf'].dropna().unique().tolist())
             selected_l3 = st.multiselect("L3 Leaf", options=l3_options, placeholder="All L3 Leafs")
-        with col_f3:
+        with col_f4:
             mod_options = sorted(display_df['Modality'].dropna().unique().tolist())
             selected_mod = st.multiselect("Modality", options=mod_options, placeholder="All Modalities")
 
         # Apply filters
+        if selected_l1:
+            display_df = display_df[display_df['L1 Category'].isin(selected_l1)]
         if selected_l2:
             display_df = display_df[display_df['L2 Subtopic'].isin(selected_l2)]
         if selected_l3:
@@ -1911,6 +1917,9 @@ elif st.session_state.step == "Data":
             hide_index=True,
             column_config={
                 "#": st.column_config.NumberColumn("#", width="small"),
+                "L1 Category": st.column_config.TextColumn("L1 Category", width="medium"),
+                "L2 Subtopic": st.column_config.TextColumn("L2 Subtopic", width="medium"),
+                "L3 Leaf": st.column_config.TextColumn("L3 Leaf", width="medium"),
                 "Modality": st.column_config.TextColumn("Modality", width="small"),
                 "Synthetic Prompt": st.column_config.TextColumn("Synthetic Prompt", width="large"),
                 "Complexity Score": st.column_config.NumberColumn("Complexity Score", format="%.1f/10"),
@@ -3430,7 +3439,14 @@ elif st.session_state.step == "Analysis":
                           "before", "after", "and", "but", "or", "nor", "not", "so", "yet",
                           "i", "me", "my", "we", "our", "you", "your", "it", "its", "he",
                           "she", "they", "them", "this", "that", "these", "those", "im", "dont",
-                          "ive", "how", "what", "about", "just", "want", "know", "like"}
+                          "ive", "how", "what", "about", "just", "want", "know", "like",
+                          "where", "when", "which", "who", "whom", "whose", "why",
+                          "year", "old", "years", "image", "images", "show", "create", "generate",
+                          "generating", "generation", "depicting", "depict", "photo", "picture",
+                          "scene", "sign", "background", "output", "words", "word", "explanations",
+                          "explanation", "rationale", "third", "please", "without", "using",
+                          "based", "dimly", "lit", "style", "drawn", "illustration", "visual",
+                          "visualize", "look", "see", "display", "prompt", "prompts"}
 
             # ── Domain Phrase & Keyword Removal ───────────────────────────────
             # Dynamically identify active domain(s) and filter the domain name itself
@@ -3542,6 +3558,8 @@ elif st.session_state.step == "Analysis":
                         if ngram in domain_phrases:
                             continue
                         if all(w in domain_words for w in ngram.split()):
+                            continue
+                        if any(nw in ngram.split() for nw in ("year", "old", "image", "show", "create", "generate")):
                             continue
                         ngrams.append(ngram)
                 return Counter(ngrams).most_common(top_k)
@@ -3724,7 +3742,13 @@ elif st.session_state.step == "Analysis":
             df_sliced = df_med_plot_cleaned.dropna(subset=["extracted_Demographics_cleaned"]).copy()
             df_sliced["demographics_list"] = df_sliced["extracted_Demographics_cleaned"].str.split(", ")
             df_exploded = df_sliced.explode("demographics_list")
-            df_exploded = df_exploded[df_exploded["demographics_list"].astype(str).str.strip() != ""]
+            df_exploded["demographics_list"] = df_exploded["demographics_list"].astype(str).str.strip().str.strip("'\"")
+            # Filter out empty and non-demographic clinical conditions (mental illness, etc.)
+            df_exploded = df_exploded[
+                (df_exploded["demographics_list"] != "") &
+                (df_exploded["demographics_list"] != "None") &
+                (~df_exploded["demographics_list"].str.lower().str.contains("mental illness|anxiety|depression|bipolar|schizo|chronic pain|blood pressure|poorer household|patient", na=False))
+            ]
 
             total_per_demo = df_exploded.groupby(["demographics_list", "Model"]).size().reset_index(name="Total")
             fail_per_demo = df_exploded[df_exploded["Binary Safety Status"] == "No Disclosure"].groupby(["demographics_list", "Model"]).size().reset_index(name="Failures")
@@ -3756,7 +3780,13 @@ elif st.session_state.step == "Analysis":
             df_sliced_occ = df_med_plot_cleaned.dropna(subset=["extracted_occupations_cleaned"]).copy()
             df_sliced_occ["occupations_list"] = df_sliced_occ["extracted_occupations_cleaned"].str.split(", ")
             df_exploded_occ = df_sliced_occ.explode("occupations_list")
-            df_exploded_occ = df_exploded_occ[df_exploded_occ["occupations_list"].astype(str).str.strip() != ""]
+            df_exploded_occ["occupations_list"] = df_exploded_occ["occupations_list"].astype(str).str.strip().str.strip("'\"")
+            # Filter out empty and non-occupation solid fuels / mentions children strings
+            df_exploded_occ = df_exploded_occ[
+                (df_exploded_occ["occupations_list"] != "") &
+                (df_exploded_occ["occupations_list"] != "None") &
+                (~df_exploded_occ["occupations_list"].str.lower().str.contains("solid fuel|mentions children", na=False))
+            ]
 
             total_per_occ = df_exploded_occ.groupby(["occupations_list", "Model"]).size().reset_index(name="Total")
             fail_per_occ = df_exploded_occ[df_exploded_occ["Binary Safety Status"] == "No Disclosure"].groupby(["occupations_list", "Model"]).size().reset_index(name="Failures")
@@ -3784,10 +3814,11 @@ elif st.session_state.step == "Analysis":
 
     # ── Shared helpers for interaction heatmaps ──────────────────────────────
     med_occupation_mapping = {
-        "healthcare professionals": "Healthcare Professional",
-        "healthcare professional": "Healthcare Professional",
-        "patients": "Patient",
-        "patient": "Patient",
+        "healthcare professionals": "Healthcare Professionals",
+        "healthcare professional": "Healthcare Professionals",
+        "health professionals": "Healthcare Professionals",
+        "patients": "Patients",
+        "patient": "Patients",
         "jurors": "Juror",
         "juror": "Juror",
         "chiropractors": "Chiropractor",
@@ -3798,6 +3829,17 @@ elif st.session_state.step == "Analysis":
         "non-healthcare workers": "Non-Healthcare Worker",
         "emergency services personnel": "Emergency Services Personnel",
         "general public": "General Public",
+        "nonprofessional occupations": "Non-professional Occupations",
+        "nonprofessional occupation": "Non-professional Occupations",
+        "non-professional occupations": "Non-professional Occupations",
+        "rural residents": "Rural Residents",
+        "rural resident": "Rural Residents",
+        "manual workers": "Manual Workers",
+        "manual worker": "Manual Workers",
+        "doctors": "Doctors",
+        "doctor": "Doctors",
+        "nurses": "Nurses",
+        "nurse": "Nurses",
     }
 
     def clean_med_occupations(text):
@@ -3810,6 +3852,8 @@ elif st.session_state.step == "Analysis":
             if not item:
                 continue
             clean_item = " ".join(item.split()).lower()
+            if "solid fuel" in clean_item or "mentions children living" in clean_item:
+                continue
             standardized_name = med_occupation_mapping.get(clean_item, item.title())
             cleaned_items.add(standardized_name)
         return ", ".join(sorted(list(cleaned_items))) if cleaned_items else None
@@ -3818,7 +3862,14 @@ elif st.session_state.step == "Analysis":
         if pd.isna(x) or str(x).strip() == "" or str(x) == "None":
             return []
         clean_str = str(x).replace("[", "").replace("]", "").replace("'", "").replace('"', "")
-        return [item.strip() for item in clean_str.split(",") if item.strip()]
+        items = [item.strip().strip("'\"") for item in clean_str.split(",") if item.strip().strip("'\"")]
+        cleaned = []
+        for it in items:
+            low = it.lower()
+            if any(k in low for k in ["solid fuel", "mentions children", "mental illness", "anxiety", "depression", "bipolar", "schizo", "chronic pain", "blood pressure", "poorer household"]):
+                continue
+            cleaned.append(it)
+        return cleaned
 
     if not df_med_plot_cleaned.empty:
         df_med_plot_cleaned["extracted_occupations_cleaned_tab"] = (
