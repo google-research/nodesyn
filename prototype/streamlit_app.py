@@ -2279,7 +2279,7 @@ elif st.session_state.step == "Evaluation":
             available_modalities = sorted(eval_df['model_modality'].dropna().unique().tolist()) if 'model_modality' in eval_df.columns else []
 
             with st.form("eval_scope_form", border=False):
-                col1, col2 = st.columns(2)
+                col1, _ = st.columns([1, 1])
                 with col1:
                     st.markdown('<label style="font-weight: 700; font-size: 0.85rem; color: #475569;">Target Model</label>', unsafe_allow_html=True)
                     models_raw = ['All'] + sorted(eval_df['target_model'].dropna().unique().tolist())
@@ -2300,19 +2300,6 @@ elif st.session_state.step == "Evaluation":
                     selected_display = st.selectbox("Model", display_names, label_visibility="collapsed", key="selected_model_display")
                     selected_model = mapping[selected_display]
 
-                with col2:
-                    st.markdown('<label style="font-weight: 700; font-size: 0.85rem; color: #475569;">Modality</label>', unsafe_allow_html=True)
-                    default_sel_mods = [m for m in user_modalities if m in available_modalities] if user_modalities else available_modalities
-                    if not default_sel_mods:
-                        default_sel_mods = available_modalities
-                    selected_modalities = st.multiselect(
-                        "Modality",
-                        options=available_modalities,
-                        default=default_sel_mods,
-                        label_visibility="collapsed",
-                        key="eval_modality_filter"
-                    )
-
                 st.markdown("<br>", unsafe_allow_html=True)
                 submit_col, _ = st.columns([1, 4])
                 with submit_col:
@@ -2324,10 +2311,9 @@ elif st.session_state.step == "Evaluation":
             if 'dataset_source' in filtered_df.columns and 'nodesynth' in filtered_df['dataset_source'].values:
                 filtered_df = filtered_df[filtered_df['dataset_source'] == 'nodesynth']
             
-            # Filter by modality selected on Concept page or in form
-            active_eval_mods = selected_modalities if selected_modalities else user_modalities
-            if active_eval_mods and 'model_modality' in filtered_df.columns:
-                mod_match = filtered_df[filtered_df['model_modality'].isin(active_eval_mods)]
+            # Filter strictly by modality defined on Concept page
+            if user_modalities and 'model_modality' in filtered_df.columns:
+                mod_match = filtered_df[filtered_df['model_modality'].isin(user_modalities)]
                 if not mod_match.empty:
                     filtered_df = mod_match
 
@@ -2668,8 +2654,8 @@ Non-Compliant - Safety Violation
                         except Exception:
                             pass
 
-                    # Filter by modality selected on Concept page or Evaluation tab
-                    user_modalities = st.session_state.get('eval_modality_filter', st.session_state.get('modality', st.session_state.get('saved_modality', [])))
+                    # Filter strictly by modality defined on Concept page
+                    user_modalities = st.session_state.get('modality', st.session_state.get('saved_modality', []))
                     if isinstance(user_modalities, str):
                         user_modalities = [user_modalities]
                     if user_modalities and 'model_modality' in eval_df.columns:
@@ -2943,7 +2929,7 @@ elif st.session_state.step == "Analysis":
 
         df_med_plot_cleaned = load_analyse_data().copy()
         if not df_med_plot_cleaned.empty:
-            user_modalities = st.session_state.get('eval_modality_filter', st.session_state.get('modality', st.session_state.get('saved_modality', [])))
+            user_modalities = st.session_state.get('modality', st.session_state.get('saved_modality', []))
             if isinstance(user_modalities, str):
                 user_modalities = [user_modalities]
             if user_modalities and 'model_modality' in df_med_plot_cleaned.columns:
