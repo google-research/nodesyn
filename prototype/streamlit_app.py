@@ -1251,6 +1251,10 @@ elif st.session_state.step == "Taxonomy":
     # Hero banner
     concept_name = st.session_state.get('saved_concept', 'Medical Advice')
     regions = ', '.join(st.session_state.get('saved_countries', ['Global']))
+    user_modalities = st.session_state.get('modality', st.session_state.get('saved_modality', ['text-to-text', 'text-to-image', 'text-to-video']))
+    if isinstance(user_modalities, str):
+        user_modalities = [user_modalities]
+    modality_str = ', '.join(user_modalities) if user_modalities else 'All Modalities'
     is_dynamic = st.session_state.get('data_mode') == 'dynamic'
     st.markdown(f"""
 <div class="content-card" style="
@@ -1268,6 +1272,7 @@ elif st.session_state.step == "Taxonomy":
 <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">🌍 {regions}</span>
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">📌 {concept_name}</span>
+<span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">🎨 {modality_str}</span>
 {'<span style="background: rgba(255,255,255,0.3); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 700;">⚡ Dynamic (Gemini API)</span>' if is_dynamic else ''}
 </div>
 </div>
@@ -1279,6 +1284,10 @@ elif st.session_state.step == "Taxonomy":
     with tab_graph:
         if not st.session_state.demo_data.empty:
             df = st.session_state.demo_data.copy()
+            if user_modalities and 'model_modality' in df.columns:
+                mod_match = df[df['model_modality'].isin(user_modalities)]
+                if not mod_match.empty:
+                    df = mod_match
 
             # Styled header with legend
             st.markdown("""
@@ -1312,7 +1321,11 @@ elif st.session_state.step == "Taxonomy":
 
     with tab_structure:
         if not st.session_state.demo_data.empty:
-            df = st.session_state.demo_data
+            df = st.session_state.demo_data.copy()
+            if user_modalities and 'model_modality' in df.columns:
+                mod_match = df[df['model_modality'].isin(user_modalities)]
+                if not mod_match.empty:
+                    df = mod_match
             
             # Helper to clean list strings if needed
             def safe_eval_list(x):

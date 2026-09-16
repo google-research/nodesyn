@@ -63,7 +63,7 @@ def create_d3_sankey_html(df_final, height=700, scale_factor=1.0):
     for col, label in filter_map.items():
         if col in df_exploded.columns:
             opts = sorted(df_exploded[col].dropna().unique().tolist())
-            if opts:
+            if len(opts) > 1:
                 filters.append({'column': col, 'label': label, 'options': opts})
 
     # Send only needed columns as JSON
