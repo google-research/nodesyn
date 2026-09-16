@@ -2397,6 +2397,8 @@ elif st.session_state.step == "Evaluation":
         if st.button("Next: Define Autorator", type="primary"):
             st.session_state.highest_step = max(st.session_state.highest_step, 6)
             st.session_state.step = "Autorater"
+            st.session_state.annotation_started = False
+            st.session_state.static_autorater_rated_model = None
             st.rerun()
 
 elif st.session_state.step == "Autorater":
@@ -2640,8 +2642,10 @@ Non-Compliant - Safety Violation
 </div>""", unsafe_allow_html=True)
             selected_model = st.selectbox("Autorater model", ["Gemini", "GPT"], key="static_autorater_model_select", label_visibility="collapsed")
             
-            if st.button("Rate", type="secondary", key="start_autorater_btn"):
+            if st.button("Rate", type="primary", key="start_autorater_btn"):
                 st.session_state.annotation_started = True
+                st.session_state.static_autorater_rated_model = selected_model
+                st.rerun()
 
         with col2:
             st.markdown("""
@@ -2652,7 +2656,10 @@ Non-Compliant - Safety Violation
 <h3 style="margin: 0; color: #0f172a; font-size: 1.25rem; font-weight: 800;">Autorater Feedback</h3>
 </div>
 """, unsafe_allow_html=True)
-            if st.session_state.get("annotation_started", True):
+            rated_model = st.session_state.get("static_autorater_rated_model")
+            if st.session_state.get("annotation_started", False) and rated_model is not None:
+                if selected_model != rated_model:
+                    st.info(f"💡 You selected **{selected_model}**. Click **'Rate'** on the left to refresh the table with {selected_model} ratings.")
                 try:
                     eval_df = None
                     for fname in ["evaluation_data.csv", "evaluation_data_2.csv"]:
@@ -2679,7 +2686,7 @@ Non-Compliant - Safety Violation
                                 pass
                         return q
                     
-                    label_col = 'label_gpt' if selected_model == "GPT" else 'label_gemini'
+                    label_col = 'label_gpt' if rated_model == "GPT" else 'label_gemini'
                     if label_col in eval_df.columns:
                         raw_labels = eval_df[label_col]
                     elif 'label' in eval_df.columns:
@@ -2687,7 +2694,7 @@ Non-Compliant - Safety Violation
                     else:
                         raw_labels = pd.Series(['Disclosure - with instructions'] * len(eval_df))
 
-                    default_label = 'Disclosure - without instructions' if selected_model == "GPT" else 'Disclosure - with instructions'
+                    default_label = 'Disclosure - without instructions' if rated_model == "GPT" else 'Disclosure - with instructions'
                     valid_labels = {
                         'disclosure - with instructions': 'Disclosure - with instructions',
                         'disclosure - without instructions': 'Disclosure - without instructions',
@@ -2728,7 +2735,7 @@ Non-Compliant - Safety Violation
 
                     n_rated = len(display_df)
                     n_unique_labels = display_df['label'].nunique()
-                    judge_display = f"{selected_model} Autorater"
+                    judge_display = f"{rated_model} Autorater"
 
                     st.markdown(f"""
 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 1rem;">
@@ -2753,7 +2760,7 @@ Non-Compliant - Safety Violation
                         st.download_button(
                             "📥 Download Rated Data (CSV)",
                             data=csv_bytes,
-                            file_name=f"{active_concept.lower().replace(' ', '_')}_{selected_model.lower()}_autorater_feedback.csv",
+                            file_name=f"{active_concept.lower().replace(' ', '_')}_{rated_model.lower()}_autorater_feedback.csv",
                             mime="text/csv",
                             use_container_width=True,
                             key="stat_autorater_dl_btn"
@@ -2776,7 +2783,7 @@ Non-Compliant - Safety Violation
                 except FileNotFoundError:
                     st.error("evaluation_data.csv not found.")
             else:
-                st.info("Click 'Rate' on the left to load the feedback data.")
+                st.info("👈 Select an autorater model on the left and click **'Rate'** to populate the feedback table.")
 
         st.write("")
         col_next_an, col_reconfig, col_h_stat = st.columns([1.5, 1, 1])
@@ -2787,10 +2794,14 @@ Non-Compliant - Safety Violation
                 st.rerun()
         with col_reconfig:
             if st.button("🔄 Configure New Concept", use_container_width=True, key="stat_autorater_reconfig"):
+                st.session_state.annotation_started = False
+                st.session_state.static_autorater_rated_model = None
                 st.session_state.step = "Concept"
                 st.rerun()
         with col_h_stat:
             if st.button("🏠 Home", use_container_width=True, key="stat_autorater_home"):
+                st.session_state.annotation_started = False
+                st.session_state.static_autorater_rated_model = None
                 st.session_state.step = "Home"
                 st.rerun()
 
@@ -2971,7 +2982,7 @@ elif st.session_state.step == "Analysis":
                 if not mod_match.empty:
                     df_med_plot_cleaned = mod_match
 
-            sel_judge = st.session_state.get("static_autorater_model_select", "Gemini")
+            sel_judge = st.session_state.get("static_autorater_rated_model", st.session_state.get("static_autorater_model_select", "Gemini"))
             if sel_judge == "GPT" and "label_gpt" in df_med_plot_cleaned.columns:
                 df_med_plot_cleaned["Safety Status"] = df_med_plot_cleaned["label_gpt"]
                 df_med_plot_cleaned["Binary Safety Status"] = df_med_plot_cleaned["label_gpt"].apply(
