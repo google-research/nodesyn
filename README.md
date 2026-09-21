@@ -1,13 +1,13 @@
-# NodeSynth: Socially Aligned Synthetic Data for AI Evaluation
+# NodeSyn: Socially Aligned Synthetic Data for AI Evaluation
 
 🚀 [**Launch Live Prototype**](https://support-tickets-29m1bnjrfkk.streamlit.app/#end-to-end-workflow)
 
-**NodeSynth** is a research prototype that implements a scalable, multi-stage methodology for creating socially relevant and evidence-grounded synthetic data (e.g., annotated queries) for AI model evaluation. 
+**NodeSyn** is a research prototype that implements a scalable, multi-stage methodology for creating socially relevant and evidence-grounded synthetic data (e.g., annotated queries) for AI model evaluation. 
 
 The pipeline breaks down topics related to safety policies (e.g., harassment) and sensitive domains (e.g., education) into granular taxonomies using a fine-tuned taxonomy generator. It identifies key relationships within these taxonomies (e.g., affected social groups, geographic regions, use cases) and generates high-fidelity synthetic queries designed for rigorous model evaluation.
 
 ## 🚨 The Challenge
-Standard benchmarks and manual query creation struggle to capture real-world sociotechnical nuance or scale effectively. While generic synthetic data offers an alternative, these datasets often contain unintended biases, lack diversity, and are inaccurate for highly-sensitive domains. NodeSynth enables users (researchers, developers, and auditors) to go from a high-level topic to a rich synthetic dataset capturing relationships that represent *documented harms* in the real world.
+Standard benchmarks and manual query creation struggle to capture real-world sociotechnical nuance or scale effectively. While generic synthetic data offers an alternative, these datasets often contain unintended biases, lack diversity, and are inaccurate for highly-sensitive domains. NodeSyn enables users (researchers, developers, and auditors) to go from a high-level topic to a rich synthetic dataset capturing relationships that represent *documented harms* in the real world.
 
 ## 💡 Core Contributions
 * **Sociotechnical Framework:** Leverages an expert-curated Taxonomy Generator (TaG) to ground abstract concepts in concrete, evidence-based scenarios.
@@ -15,9 +15,9 @@ Standard benchmarks and manual query creation struggle to capture real-world soc
 * **Interpretable Diagnostics:** Allows evaluators to trace exact failure intersections (demographics, geography, taxonomy level) to prioritize key areas of concern for targeted mitigation and in-depth human evaluation.
 
 <p align="center">
-  <img src="paper/NodeSynth_flow.svg" alt="NodeSynth Flowchart" width="100%">
+  <img src="paper/NodeSyn_flow.svg" alt="NodeSyn Flowchart" width="100%">
   <br>
-  <em><b>Figure 1:</b> A visual representation of the NodeSynth approach. Based on user inputs, NodeSynth (Step 1) creates a complete, three layer taxonomy using a fine-tuned model; and (Step 2) extracts metadata (e.g., sensitive characteristics) from relevant sources, related to the branches of the taxonomy. Utilizing the aforementioned concepts and annotations, NodeSynth (Step 3) generates annotated synthetic queries for model evaluation.</em>
+  <em><b>Figure 1:</b> A visual representation of the NodeSyn approach. Based on user inputs, NodeSyn (Step 1) creates a complete, three layer taxonomy using a fine-tuned model; and (Step 2) extracts metadata (e.g., sensitive characteristics) from relevant sources, related to the branches of the taxonomy. Utilizing the aforementioned concepts and annotations, NodeSyn (Step 3) generates annotated synthetic queries for model evaluation.</em>
 </p>
 
 
@@ -35,11 +35,11 @@ This prototype and the approach outlined in the [accompanying paper](https://arx
 
 ## 📖 Citation
 
-If you use NodeSynth in your research, please cite the following paper:
+If you use NodeSyn in your research, please cite the following paper:
 
 ```bibtex
-@article{rashid2026nodesynth,
-  title={NodeSynth: Socially Aligned Synthetic Data for AI Evaluation},
+@article{rashid2026NodeSyn,
+  title={NodeSyn: Socially Aligned Synthetic Data for AI Evaluation},
   author={Rashid, Qazi Mamunur and Yang, Xuan and Yang, Zhengzhe and Pan, Yanzhou and van Liemt, Erin and Neal, Darlene and Pancholi, Kshitij and Smith-Loud, Jamila},
   journal={arXiv preprint arXiv:2605.14381},
   year={2026}
