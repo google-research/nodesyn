@@ -115,6 +115,255 @@ _SAFETY_SETTINGS = [
 ]
 
 
+class GeminiBackendError(Exception):
+    """Exception raised when an AI backend call fails with diagnostics and actionable retry guidance."""
+
+    def __init__(
+        self,
+        raw_error: Exception | str,
+        model: str | None = None,
+        provider: str | None = None,
+        context: str | None = None,
+    ):
+        self.raw_error = raw_error
+        self.raw_message = str(raw_error)
+        self.model = model
+        self.provider = provider or (get_model_provider(model) if model else "gemini")
+        self.context = context
+
+        self.diagnostics = parse_backend_error(self.raw_message, model=self.model, provider=self.provider)
+        self.category = self.diagnostics["category"]
+        self.headline = self.diagnostics["headline"]
+        self.gist = self.diagnostics["gist"]
+        self.explanation = self.diagnostics["explanation"]
+        self.retry_action = self.diagnostics["retry_action"]
+        self.is_retryable = self.diagnostics["is_retryable"]
+
+        super().__init__(f"[{self.category}] {self.gist} (Details: {self.raw_message})")
+
+
+def parse_backend_error(
+    error: Exception | str,
+    model: str | None = None,
+    provider: str | None = None,
+) -> dict[str, Any]:
+    """Parses various AI backend error payloads and extracts actionable diagnostic gist and retry instructions."""
+    raw_str = str(error)
+
+    # 1. Clean protobuf / gRPC octal escape codes and debug wrappers
+    unescaped_str = re.sub(r'\\[0-7]{3}', ' ', raw_str)
+
+    # 2. Extract inner message if JSON payload is present in the error string
+    inner_msg = None
+    json_match = re.search(r'(\{.*\})', raw_str, re.DOTALL)
+    if json_match:
+        try:
+            raw_json = json_match.group(1).replace("'", '"')
+            parsed_json = json.loads(raw_json)
+            if isinstance(parsed_json, dict):
+                if "error" in parsed_json and isinstance(parsed_json["error"], dict):
+                    inner_msg = parsed_json["error"].get("message")
+                elif "message" in parsed_json:
+                    inner_msg = parsed_json.get("message")
+        except Exception:
+            pass
+
+    # Extract clean sentence from protobuf debug info if present
+    if not inner_msg:
+        avail_match = re.search(
+            r'((?:This model\s+)?[a-zA-Z0-9_\-\.\/]+ is no longer available[^\.\"\\\n]*\.\s*Please update your code to use [a-zA-Z0-9_\-\.\/]+[^\.\"\\\n]*)',
+            unescaped_str,
+            re.IGNORECASE,
+        )
+        if avail_match:
+            inner_msg = avail_match.group(1).strip()
+
+    clean_text = inner_msg if inner_msg else raw_str
+    lower_text = unescaped_str.lower()
+    model_str = f" [{model}]" if model else ""
+
+    # Check 1: Model No Longer Available / Deprecated / Retired
+    if (
+        "no longer available" in lower_text
+        or "is no longer available" in lower_text
+        or "has been deprecated" in lower_text
+        or "model is deprecated" in lower_text
+        or "decommissioned" in lower_text
+        or "interactions api" in lower_text
+        or ("update your code to use" in lower_text and "model" in lower_text)
+    ):
+        # Extract suggested replacement model if mentioned by backend
+        rec_match = re.search(r'(?:use|switch to|recommend(?:ed)?)\s+(?:models?/)?(gemini-[a-zA-Z0-9\.\-_]+)', unescaped_str, re.IGNORECASE)
+        ALLOWED_GEMINI_MODELS = {
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.8-live",
+            "gemini-3.5-flash",
+            "gemini-3.1-flash-lite",
+        }
+        suggested_model = "gemini-3.8-flash"
+        if rec_match:
+            candidate = rec_match.group(1).lower()
+            if candidate in ALLOWED_GEMINI_MODELS:
+                suggested_model = candidate
+        suggested_display = suggested_model.replace("gemini-", "Gemini ").replace("-", " ").title()
+
+        # Extract cleaner summary sentence
+        clean_sentence_match = re.search(r'((?:This model\s+)?[a-zA-Z0-9_\-\.\/]+ is no longer available[^\.\"\\\n]*)', unescaped_str, re.IGNORECASE)
+        target_model_name = model or "This model"
+        if clean_sentence_match:
+            gist_msg = clean_sentence_match.group(1).strip() + f". Please update to {suggested_display} ({suggested_model})."
+        else:
+            gist_msg = f"Model '{target_model_name}' is no longer available. Google recommends updating to {suggested_display} ({suggested_model})."
+
+        return {
+            "category": "MODEL_DEPRECATED",
+            "headline": f"Model Retired / No Longer Available{model_str}",
+            "gist": gist_msg,
+            "explanation": f"Google Gemini has retired this model version. The backend recommends updating your code to use {suggested_display} (`{suggested_model}`) via the current Gemini API.",
+            "retry_action": f"Please switch your selected model to {suggested_display} (`{suggested_model}`) in the model selector and try again.",
+            "is_retryable": False,
+            "recommended_model": suggested_model,
+            "raw_message": clean_text,
+        }
+
+    # Check 2: Decode queue preemption by higher priority request
+    if (
+        "preempted out of decode queue" in lower_text
+        or ("decode queue" in lower_text and "priority" in lower_text)
+        or "preempted" in lower_text
+    ):
+        return {
+            "category": "QUEUE_PREEMPTION",
+            "headline": "Request Preempted from Queue",
+            "gist": "Preempted out of decode queue by a higher priority request.",
+            "explanation": "Google's Gemini backend server reached transient concurrency limits and evicted this request to prioritize higher-tier traffic.",
+            "retry_action": "Please retry your request now. If the issue recurs during peak traffic, consider switching to Gemini 3.8 Flash or Gemini 3.7 Flash.",
+            "is_retryable": True,
+            "raw_message": clean_text,
+        }
+
+    # Check 3: High Demand / Temporary Capacity (503 / spikes in demand)
+    if (
+        ("high demand" in lower_text and "temporary" in lower_text)
+        or "experiencing high demand" in lower_text
+        or "spikes in demand are usually temporary" in lower_text
+        or "spikes in demand" in lower_text
+        or ("503" in lower_text and ("unavailable" in lower_text or "demand" in lower_text or "overloaded" in lower_text))
+        or "model is overloaded" in lower_text
+    ):
+        return {
+            "category": "HIGH_DEMAND",
+            "headline": "Model Experiencing High Demand",
+            "gist": "This model is currently experiencing high demand. Spikes in demand are usually temporary.",
+            "explanation": "The compute cluster serving this model is temporarily overloaded by high global request volume.",
+            "retry_action": "Please wait 10–30 seconds and click retry. If capacity remains tight, switching to an alternative model (e.g. Gemini 3.8 Flash or Gemini 3.1 Flash-Lite) is recommended.",
+            "is_retryable": True,
+            "raw_message": clean_text,
+        }
+
+    # Check 4: Model Not Found (404 / NOT_FOUND)
+    if (
+        "404" in lower_text
+        or "not found" in lower_text
+        or "not_found" in lower_text
+        or "is not found for api version" in lower_text
+        or "unknown model" in lower_text
+    ):
+        return {
+            "category": "MODEL_NOT_FOUND",
+            "headline": f"Model Endpoint Not Found (404){model_str}",
+            "gist": f"The requested model endpoint '{model or 'specified'}' was not found or is not available for this API version.",
+            "explanation": "The model identifier might be mistyped, decommissioned, or unavailable under the current API version (v1beta/v1) for your project.",
+            "retry_action": "Please select a standard supported model (such as Gemini 3.8 Flash or Gemini 3.7 Flash) in the model selector and try again.",
+            "is_retryable": False,
+            "raw_message": clean_text,
+        }
+
+    # Check 4: Rate limit / Quota Exceeded (429 / RESOURCE_EXHAUSTED)
+    if (
+        "429" in lower_text
+        or "resource_exhausted" in lower_text
+        or "quota exceeded" in lower_text
+        or "rate limit" in lower_text
+        or "too many requests" in lower_text
+    ):
+        return {
+            "category": "QUOTA_EXHAUSTED",
+            "headline": "API Rate Limit / Quota Exceeded (429)",
+            "gist": "Resource quota or rate limit has been exhausted on your API key.",
+            "explanation": "Your project reached its Queries-Per-Minute (QPM) limit or token allowance for the current billing cycle.",
+            "retry_action": "Please wait 30–60 seconds before retrying, or check your quota allocation in Google AI Studio or GCP Console.",
+            "is_retryable": True,
+            "raw_message": clean_text,
+        }
+
+    # Check 5: Authentication / Invalid API Key
+    if (
+        "api_key_invalid" in lower_text
+        or "api key not valid" in lower_text
+        or "permission_denied" in lower_text
+        or ("400" in lower_text and "api_key" in lower_text)
+        or ("401" in lower_text and "unauthorized" in lower_text)
+        or ("403" in lower_text and "forbidden" in lower_text)
+        or "unregistered projects" in lower_text
+        or "no gemini api key provided" in lower_text
+    ):
+        return {
+            "category": "AUTH_ERROR",
+            "headline": "Invalid or Unauthorized API Key",
+            "gist": "API authentication failed: Invalid, inactive, or unauthorized API key.",
+            "explanation": "The API key provided is not authorized to call the Gemini API or the associated Google Cloud project is inactive.",
+            "retry_action": "Please check your GEMINI_API_KEY environment variable or verify your key in Google AI Studio, then retry.",
+            "is_retryable": False,
+            "raw_message": clean_text,
+        }
+
+    # Check 6: Safety Block
+    if "safety" in lower_text and ("block" in lower_text or "finish_reason" in lower_text or "content filter" in lower_text):
+        return {
+            "category": "SAFETY_BLOCK",
+            "headline": "Generation Blocked by Safety Filters",
+            "gist": "The model response was withheld by automated safety or recitation filters.",
+            "explanation": "The prompt or expected output triggered one of the model safety thresholds (harassment, dangerous content, etc.).",
+            "retry_action": "Please modify your domain instructions or prompt query to reduce sensitivity, then retry.",
+            "is_retryable": False,
+            "raw_message": clean_text,
+        }
+
+    # Check 7: Network Timeout / Connection Error
+    if (
+        "timed out" in lower_text
+        or "timeout" in lower_text
+        or "connection reset" in lower_text
+        or "remote disconnected" in lower_text
+        or "econnrefused" in lower_text
+    ):
+        return {
+            "category": "NETWORK_TIMEOUT",
+            "headline": "Network Connection Timeout",
+            "gist": "Network request timed out while communicating with the model backend.",
+            "explanation": "The remote API server did not send a response within the allotted timeout window.",
+            "retry_action": "Please check your internet connection and click retry.",
+            "is_retryable": True,
+            "raw_message": clean_text,
+        }
+
+    # Check 8: Generic Fallback
+    one_liner = clean_text.split("\n")[0].strip()
+    if len(one_liner) > 180:
+        one_liner = one_liner[:180] + "..."
+    return {
+        "category": "BACKEND_ERROR",
+        "headline": f"Backend API Error{model_str}",
+        "gist": one_liner or "An error was returned by the model backend.",
+        "explanation": "The model provider returned an unexpected error status.",
+        "retry_action": "Please retry your request. If the problem persists, try another model or check provider status.",
+        "is_retryable": True,
+        "raw_message": clean_text,
+    }
+
+
 class GenerateContentRequest:
     """Base POJO class for generate content requests."""
 
@@ -131,10 +380,12 @@ class GenerateContentResult:
         request: GenerateContentRequest,
         generated_content: str,
         full_response: Any = None,
+        error: str | None = None,
     ):
         self.request = request
         self.generated_content = generated_content
         self.full_response = full_response
+        self.error = error
 
 
 class MultiModelUtils:
@@ -264,12 +515,14 @@ class MultiModelUtils:
     def generate_content(
         self,
         request: GenerateContentRequest,
-        model: str = "gemini-3.5-flash-lite",
+        model: str = "gemini-3.8-flash",
         tools: list[dict[str, Any] | types.Tool] | None = None,
+        raise_for_status: bool = False,
     ) -> GenerateContentResult:
         """Calls appropriate model provider with short retry logic."""
         provider = self.get_model_provider(model)
         retries = 2
+        last_error = None
         for i in range(retries):
             try:
                 if provider == "openai":
@@ -288,36 +541,61 @@ class MultiModelUtils:
                 ):
                     return GenerateContentResult(request, text, resp)
             except Exception as e:
+                last_error = e
                 logging.warning("Attempt %d/%d for [%s] failed with error: %s", i + 1, retries, model, str(e))
+                err_str = str(e).lower()
+                if any(fatal in err_str for fatal in ["404", "not found", "not_found", "api_key", "permission_denied", "no longer available", "deprecated"]):
+                    break
                 if i < retries - 1:
-                    time.sleep(0.5)
+                    time.sleep(1.0)
                 else:
-                    return GenerateContentResult(request, "")
+                    break
+
+        if last_error is not None:
+            if raise_for_status:
+                raise GeminiBackendError(last_error, model=model, provider=provider)
+            return GenerateContentResult(request, "", error=str(last_error))
+
         return GenerateContentResult(request, "")
 
     def generate_content_batch(
         self,
         requests: list[GenerateContentRequest],
-        model: str = "gemini-3.5-flash-lite",
+        model: str = "gemini-3.8-flash",
         tools: list[dict[str, Any]] | None = None,
         max_workers: int = 10,
+        raise_for_status: bool = True,
     ) -> list[GenerateContentResult]:
         """Calls model generate_content in parallel across workers."""
+        if not requests:
+            return []
         results: list[GenerateContentResult] = []
         with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             tasks_futures = {}
             for item in requests:
-                tasks_futures[executor.submit(self.generate_content, item, model, tools)] = item
+                tasks_futures[executor.submit(self.generate_content, item, model, tools, False)] = item
                 time.sleep(0.02)
 
             for future in futures.as_completed(tasks_futures):
+                req = tasks_futures[future]
                 try:
                     result = future.result()
                     results.append(result)
                 except Exception as e:
-                    req = tasks_futures[future]
                     logging.error("Batch request failed for model %s: %s", model, str(e))
-                    results.append(GenerateContentResult(req, ""))
+                    results.append(GenerateContentResult(req, "", error=str(e)))
+
+        if raise_for_status:
+            errors = [r.error for r in results if getattr(r, "error", None)]
+            if errors:
+                has_fatal = any(
+                    any(fatal in str(err).lower() for fatal in ["404", "not found", "not_found", "api_key", "permission_denied"])
+                    for err in errors
+                )
+                if has_fatal or len(errors) == len(requests) or len(errors) >= max(1, len(requests) // 2):
+                    logging.error("Batch content generation failed with %d/%d errors for model %s: %s", len(errors), len(requests), model, errors[0])
+                    raise GeminiBackendError(errors[0], model=model)
+
         return results
 
 
@@ -431,11 +709,13 @@ class CategoryTopicsGenerator:
             return results[:3]
 
     def generate(
-        self, domain: str, country: str, language_code: str, domain_definition: str, model: str = "gemini-3.5-flash"
+        self, domain: str, country: str, language_code: str, domain_definition: str, model: str = "gemini-3.8-flash"
     ) -> pd.DataFrame:
         prompt = self._generate_prompt(domain, country, language_code, domain_definition)
         req = GenerateContentRequest(prompt=prompt)
-        res = self._gemini_utils.generate_content(req, model=model)
+        res = self._gemini_utils.generate_content(req, model=model, raise_for_status=True)
+        if getattr(res, "error", None):
+            raise GeminiBackendError(res.error, model=model)
         
         cats_and_topics = []
         if res.generated_content:
@@ -541,7 +821,7 @@ class KeywordsGenerator:
         country: Any,
         language_code: str,
         domain_definition: str,
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.8-flash",
     ) -> pd.DataFrame:
         # Cap to exactly 10 requests for a single batch of 10 parallel workers
         df_subset = category_topics_df.head(10)
@@ -738,7 +1018,7 @@ class PromptsGenerator:
         country: str,
         domain_definition: str,
         num_prompts: int = 2,
-        model: str = "gemini-3.5-flash-lite",
+        model: str = "gemini-3.8-flash",
     ) -> pd.DataFrame:
         requests = []
         df_subset = taxonomy_df.head(10)
@@ -907,16 +1187,27 @@ class CredibleSourceGenerator:
             elif extracted_title not in paper_titles:
                 paper_titles.insert(0, extracted_title)
 
-        if paper_urls:
-            # Pick first Google search URL directly and save the link
-            first_url = paper_urls[0]
-            first_title = paper_titles[0] if paper_titles else (extracted_title or "Published Research Paper")
+        display_title = paper_titles[0] if paper_titles else extracted_title
+        if display_title and display_title.strip().lower() != "could not find":
+            first_url = paper_urls[0] if paper_urls else f"https://scholar.google.com/scholar?q={urllib.parse.quote_plus(display_title)}"
             paper_urls = [first_url]
-            paper_titles = [first_title]
-            display_title = first_title
+            paper_titles = [display_title]
             url_val = [first_url]
             paper_content = (
                 f"Title: {display_title} ;\n"
+                f"Occupation: {extracted_occ or 'N/A'} ;\n"
+                f"Demographics: {extracted_demo or 'N/A'} ;\n"
+                f"Country: {extracted_country or 'N/A'}"
+            )
+        elif paper_urls:
+            # Pick first Google search URL directly and save the link
+            first_url = paper_urls[0]
+            first_title = paper_titles[0] if paper_titles else "Published Research Paper"
+            paper_urls = [first_url]
+            paper_titles = [first_title]
+            url_val = [first_url]
+            paper_content = (
+                f"Title: {first_title} ;\n"
                 f"Occupation: {extracted_occ or 'N/A'} ;\n"
                 f"Demographics: {extracted_demo or 'N/A'} ;\n"
                 f"Country: {extracted_country or 'N/A'}"
@@ -941,9 +1232,11 @@ class CredibleSourceGenerator:
         category: str,
         topic: str,
         keywords: str | list[str],
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.7-flash",
     ) -> dict[str, Any]:
-        """Fetches research paper citations for a single taxonomy node using Google Search grounding."""
+        """Fetches research paper citations for a single taxonomy node using Google Search grounding.
+        If the primary model fails or returns no citations, automatically tries with fallback models.
+        """
         prompt = self._generate_prompt(domain, category, topic, keywords)
         kw_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
         req = GenerateContentRequest(
@@ -955,24 +1248,54 @@ class CredibleSourceGenerator:
                 "keywords": kw_str,
             },
         )
-        tools = [types.Tool(google_search=types.GoogleSearch())] if get_model_provider(model) == "gemini" else None
-        result = self._gemini_utils.generate_content(req, model=model, tools=tools)
-        return self._parse_result(
-            result=result,
-            domain=domain,
-            category=category,
-            topic=topic,
-            keywords_str=kw_str,
-        )
+        candidate_models = [model] + [m for m in ["gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"] if m != model]
+        last_error = None
+        fallback_parsed = None
+
+        for cand_model in candidate_models:
+            tools = [types.Tool(google_search=types.GoogleSearch())] if get_model_provider(cand_model) == "gemini" else None
+            try:
+                result = self._gemini_utils.generate_content(req, model=cand_model, tools=tools, raise_for_status=True)
+                if getattr(result, "error", None):
+                    raise GeminiBackendError(result.error, model=cand_model)
+                parsed = self._parse_result(
+                    result=result,
+                    domain=domain,
+                    category=category,
+                    topic=topic,
+                    keywords_str=kw_str,
+                )
+                if parsed.get("paper_titles") and parsed["paper_titles"] != ["Could not find"]:
+                    return parsed
+                fallback_parsed = parsed
+            except Exception as e:
+                last_error = e
+                logging.warning("Citation fetch with model %s failed: %s. Trying next fallback model...", cand_model, str(e))
+                continue
+
+        if fallback_parsed:
+            return fallback_parsed
+
+        if last_error:
+            raise GeminiBackendError(last_error, model=model)
+
+        return {
+            "paper_urls": [],
+            "paper_titles": ["Could not find"],
+            "url": [],
+            "paper_content": "Could not find",
+        }
 
     def generate(
         self,
         taxonomy_df: pd.DataFrame,
         domain: str,
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.7-flash",
         max_workers: int = 10,
     ) -> pd.DataFrame:
-        """Grounds all rows in taxonomy_df with credible research papers using Google Search."""
+        """Grounds all rows in taxonomy_df with credible research papers using Google Search.
+        If one model fails or is rate-limited, remaining rows are retried with fallback models.
+        """
         if taxonomy_df.empty:
             return taxonomy_df
 
@@ -999,26 +1322,46 @@ class CredibleSourceGenerator:
             requests.append(req)
             row_indices.append(idx)
 
-        tools = [types.Tool(google_search=types.GoogleSearch())] if get_model_provider(model) == "gemini" else None
-        try:
-            results = self._gemini_utils.generate_content_batch(
-                requests,
-                model=model,
-                tools=tools,
-                max_workers=max_workers,
-            )
-        except Exception as e:
-            logging.warning("Search grounding batch failed with model %s, retrying: %s", model, str(e))
+        candidate_models = [model] + [m for m in ["gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"] if m != model]
+        results_by_idx: dict[int, GenerateContentResult] = {}
+        pending_requests = list(requests)
+
+        for cand_model in candidate_models:
+            if not pending_requests:
+                break
+            tools = [types.Tool(google_search=types.GoogleSearch())] if get_model_provider(cand_model) == "gemini" else None
             try:
-                results = self._gemini_utils.generate_content_batch(
-                    requests,
-                    model=model,
+                batch_res = self._gemini_utils.generate_content_batch(
+                    pending_requests,
+                    model=cand_model,
                     tools=tools,
                     max_workers=max_workers,
+                    raise_for_status=False,
                 )
-            except Exception as e2:
-                logging.error("Search grounding failed completely: %s", str(e2))
-                results = [GenerateContentResult(req, "") for req in requests]
+                still_pending = []
+                for res in batch_res:
+                    r_idx = res.request.metadata.get("row_index")
+                    if res.generated_content and not getattr(res, "error", None):
+                        results_by_idx[r_idx] = res
+                    else:
+                        still_pending.append(res.request)
+                pending_requests = still_pending
+                if not pending_requests:
+                    break
+                logging.info(
+                    "Citation batch with %s resolved %d requests; retrying %d with next fallback model...",
+                    cand_model, len(results_by_idx), len(pending_requests)
+                )
+            except Exception as e:
+                logging.warning("Search grounding batch failed with model %s: %s. Trying fallback model...", cand_model, str(e))
+                continue
+
+        for req in requests:
+            r_idx = req.metadata.get("row_index")
+            if r_idx not in results_by_idx:
+                results_by_idx[r_idx] = GenerateContentResult(req, "")
+
+        results = [results_by_idx[req.metadata.get("row_index")] for req in requests]
 
         parsed_by_idx = {}
         for res in results:
@@ -1065,7 +1408,7 @@ def generate_credible_sources(
     domain: str,
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.5-flash",
+    model: str = "gemini-3.7-flash",
     max_workers: int = 10,
 ) -> pd.DataFrame:
     """Grounds taxonomy branches with credible research papers using Google Search."""
@@ -1086,7 +1429,7 @@ def fetch_citation_for_node(
     keywords: str | list[str],
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.5-flash",
+    model: str = "gemini-3.7-flash",
 ) -> dict[str, Any]:
     """Fetches research paper citations for a single node via Google Search grounding."""
     client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
@@ -1108,7 +1451,7 @@ def generate_dynamic_prompts(
     num_prompts: int = 2,
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.5-flash-lite",
+    model: str = "gemini-3.8-flash",
     progress_callback: Any = None,
 ) -> pd.DataFrame:
     """Synthesizes dynamic prompts for a given taxonomy DataFrame."""
@@ -1140,7 +1483,7 @@ def generate_dynamic_taxonomy(
     modality: list[str] | str = "text-to-text",
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.5-flash",
+    model: str = "gemini-3.8-flash",
     progress_callback: Any = None,
 ) -> pd.DataFrame:
     """Executes the full dynamic taxonomy generation pipeline with single-batch parallelization."""
@@ -1164,7 +1507,7 @@ def generate_dynamic_taxonomy(
         cat_topics_df = cat_topics_df.head(10)
 
     if progress_callback:
-        progress_callback(0.65, f"Executing parallel batch for Level 3 keywords & demographic context with {model}...")
+        progress_callback(0.60, f"Synthesizing Level 3 Sub-Themes & User Groups with {model}...")
     
     kw_gen = KeywordsGenerator(ai_client)
     final_df = kw_gen.generate(
@@ -1179,8 +1522,8 @@ def generate_dynamic_taxonomy(
     if progress_callback:
         progress_callback(0.85, f"Discovering research paper citations for {len(final_df)} taxonomy branches...")
 
-    # Grounding: Prefer Gemini Search grounding if Gemini key available, else use selected model
-    grounding_model = "gemini-3.5-flash" if ai_client._api_keys.get("gemini") else model
+    # Grounding: Prefer Gemini 3.7 Flash for Google Search grounding if Gemini key available, else use selected model
+    grounding_model = "gemini-3.7-flash" if ai_client._api_keys.get("gemini") else model
     credible_gen = CredibleSourceGenerator(ai_client)
     try:
         final_df = credible_gen.generate(
@@ -1195,6 +1538,7 @@ def generate_dynamic_taxonomy(
         final_df["paper_titles"] = [["Could not find"] for _ in range(len(final_df))]
         final_df["url"] = [[] for _ in range(len(final_df))]
         final_df["paper_content"] = ["Could not find" for _ in range(len(final_df))]
+        final_df.attrs["grounding_error"] = str(e)
 
     # Format standard attributes
     final_df["user_case"] = use_case
@@ -1216,8 +1560,8 @@ class ModelEvaluationGenerator:
     def evaluate(
         self,
         prompts_df: pd.DataFrame,
-        model_name: str = "gemini-3.5-flash-lite",
-        display_model_name: str = "Gemini 3.5 Flash Lite",
+        model_name: str = "gemini-3.8-flash",
+        display_model_name: str = "Gemini 3.8 Flash",
         max_prompts: int = 50,
     ) -> pd.DataFrame:
         df_subset = prompts_df.head(max_prompts)
@@ -1319,7 +1663,7 @@ class AutoraterJudgeGenerator:
         self,
         eval_df: pd.DataFrame,
         rubric_template: str,
-        judge_model_name: str = "gemini-3.5-flash",
+        judge_model_name: str = "gemini-3.8-flash",
         max_rows: int | None = None,
     ) -> pd.DataFrame:
         if max_rows and max_rows > 0:
@@ -1384,7 +1728,7 @@ class AutoraterJudgeGenerator:
 def generate_dynamic_autoratings(
     eval_df: pd.DataFrame,
     rubric_template: str,
-    judge_model_name: str = "gemini-3.5-flash",
+    judge_model_name: str = "gemini-3.8-flash",
     max_rows: int | None = None,
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,

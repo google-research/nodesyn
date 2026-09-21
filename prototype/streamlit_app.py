@@ -12,11 +12,15 @@ from collections import Counter
 import time
 import json
 import textwrap
+import urllib.parse
+from typing import Any
 import importlib
 from d3_sankey import create_d3_sankey_html
 import gemini_backend
 importlib.reload(gemini_backend)
 from gemini_backend import (
+    GeminiBackendError,
+    parse_backend_error,
     generate_dynamic_taxonomy,
     generate_dynamic_prompts,
     generate_dynamic_evaluations,
@@ -46,17 +50,19 @@ PROVIDER_ICONS = {
 PROVIDER_MODELS = {
     "gemini": [
         ("gemini-3.8-flash", "Gemini 3.8 Flash"),
-        ("gemini-3.5-pro", "Gemini 3.5 Pro"),
+        ("gemini-3.7-flash", "Gemini 3.7 Flash"),
+        ("gemini-3.8-live", "Gemini 3.8 Live"),
         ("gemini-3.5-flash", "Gemini 3.5 Flash"),
-        ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
-        ("gemini-3.0-pro", "Gemini 3.0 Pro"),
+        ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
     ],
     "openai": [
         ("gpt-4o", "GPT-4o"),
         ("gpt-4o-mini", "GPT-4o Mini"),
         ("o3-mini", "o3-mini"),
+        ("o1", "o1"),
     ],
     "anthropic": [
+        ("claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet"),
         ("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet"),
         ("claude-3-5-haiku-20241022", "Claude 3.5 Haiku"),
     ],
@@ -127,10 +133,11 @@ def get_selectable_taxonomy_models() -> dict[str, str]:
     active = get_active_providers_list()
     options = {}
     if not active:
-        options["Gemini 3.8 Flash (Google)"] = "gemini-3.8-flash"
-        options["Gemini 3.5 Pro (Google)"] = "gemini-3.5-pro"
+        options["Gemini 3.8 Flash (Google - Recommended)"] = "gemini-3.8-flash"
+        options["Gemini 3.7 Flash (Google)"] = "gemini-3.7-flash"
+        options["Gemini 3.8 Live (Google - Interactive)"] = "gemini-3.8-live"
         options["Gemini 3.5 Flash (Google)"] = "gemini-3.5-flash"
-        options["Gemini 3.5 Flash Lite (Google)"] = "gemini-3.5-flash-lite"
+        options["Gemini 3.1 Flash-Lite (Google - Fast)"] = "gemini-3.1-flash-lite"
         return options
     for p in active:
         p_name = PROVIDER_DISPLAY_NAMES.get(p, p)
@@ -150,45 +157,46 @@ def get_evaluation_model_options() -> dict[str, list[tuple[str, str]]]:
         if "openai" in active:
             cross_provider.append(("gpt-4o", "GPT-4o"))
         if "anthropic" in active:
-            cross_provider.append(("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet"))
+            cross_provider.append(("claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet"))
         if "llama" in active:
             cross_provider.append(("llama-3.3-70b-versatile", "Llama 3.3 70B"))
         options["🏆 Cross-Provider Benchmark (Compare All Configured Providers)"] = cross_provider
 
     if "gemini" in active:
-        options["Gemini 3.8 Flash (Latest Flash)"] = [("gemini-3.8-flash", "Gemini 3.8 Flash")]
-        options["Gemini 3.5 Pro (Advanced Reasoning)"] = [("gemini-3.5-pro", "Gemini 3.5 Pro")]
-        options["Gemini 3.5 Flash (Fast & Capable)"] = [("gemini-3.5-flash", "Gemini 3.5 Flash")]
-        options["Gemini 3.5 Flash Lite (High Throughput)"] = [("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite")]
-        options["Gemini Pro vs Flash (3.5 Pro & 3.8 Flash)"] = [
-            ("gemini-3.5-pro", "Gemini 3.5 Pro"),
+        options["Gemini 3.8 Flash (Recommended - Fast & Capable)"] = [("gemini-3.8-flash", "Gemini 3.8 Flash")]
+        options["Gemini 3.7 Flash (Google)"] = [("gemini-3.7-flash", "Gemini 3.7 Flash")]
+        options["Gemini 3.8 Live (Interactive & Reasoning)"] = [("gemini-3.8-live", "Gemini 3.8 Live")]
+        options["Gemini 3.5 Flash (Google)"] = [("gemini-3.5-flash", "Gemini 3.5 Flash")]
+        options["Gemini 3.1 Flash-Lite (High Throughput)"] = [("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite")]
+        options["Gemini 3.8 Flash vs 3.7 Flash"] = [
             ("gemini-3.8-flash", "Gemini 3.8 Flash"),
-        ]
-        options["All Gemini Flash Models (3.8 Flash, 3.5 Flash, 3.5 Lite)"] = [
-            ("gemini-3.8-flash", "Gemini 3.8 Flash"),
-            ("gemini-3.5-flash", "Gemini 3.5 Flash"),
-            ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+            ("gemini-3.7-flash", "Gemini 3.7 Flash"),
         ]
         options["All Gemini Models"] = [
             ("gemini-3.8-flash", "Gemini 3.8 Flash"),
-            ("gemini-3.5-pro", "Gemini 3.5 Pro"),
+            ("gemini-3.7-flash", "Gemini 3.7 Flash"),
+            ("gemini-3.8-live", "Gemini 3.8 Live"),
             ("gemini-3.5-flash", "Gemini 3.5 Flash"),
-            ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+            ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
         ]
 
     if "openai" in active:
         options["GPT-4o (OpenAI)"] = [("gpt-4o", "GPT-4o")]
         options["GPT-4o Mini (OpenAI)"] = [("gpt-4o-mini", "GPT-4o Mini")]
-        options["o3-mini (OpenAI)"] = [("o3-mini", "o3-mini")]
+        options["o3-mini (OpenAI Fast Reasoning)"] = [("o3-mini", "o3-mini")]
+        options["o1 (OpenAI Frontier Reasoning)"] = [("o1", "o1")]
         options["All OpenAI Models"] = [
             ("gpt-4o", "GPT-4o"),
             ("gpt-4o-mini", "GPT-4o Mini"),
+            ("o3-mini", "o3-mini"),
         ]
 
     if "anthropic" in active:
+        options["Claude 3.7 Sonnet (Anthropic)"] = [("claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet")]
         options["Claude 3.5 Sonnet (Anthropic)"] = [("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet")]
         options["Claude 3.5 Haiku (Anthropic)"] = [("claude-3-5-haiku-20241022", "Claude 3.5 Haiku")]
         options["All Anthropic Models"] = [
+            ("claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet"),
             ("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet"),
             ("claude-3-5-haiku-20241022", "Claude 3.5 Haiku"),
         ]
@@ -202,10 +210,11 @@ def get_evaluation_model_options() -> dict[str, list[tuple[str, str]]]:
         ]
 
     if not options:
-        options["Gemini 3.8 Flash (Latest Flash)"] = [("gemini-3.8-flash", "Gemini 3.8 Flash")]
-        options["Gemini 3.5 Pro (Advanced Reasoning)"] = [("gemini-3.5-pro", "Gemini 3.5 Pro")]
+        options["Gemini 3.8 Flash (Recommended - Fast & Capable)"] = [("gemini-3.8-flash", "Gemini 3.8 Flash")]
+        options["Gemini 3.7 Flash (Google)"] = [("gemini-3.7-flash", "Gemini 3.7 Flash")]
+        options["Gemini 3.8 Live (Interactive)"] = [("gemini-3.8-live", "Gemini 3.8 Live")]
         options["Gemini 3.5 Flash (Google)"] = [("gemini-3.5-flash", "Gemini 3.5 Flash")]
-        options["Gemini 3.5 Flash Lite (Google)"] = [("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite")]
+        options["Gemini 3.1 Flash-Lite (High Throughput)"] = [("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite")]
         
     return options
 
@@ -214,30 +223,98 @@ def get_autorater_judge_options() -> dict[str, str]:
     active = [p for p in ["gemini", "openai", "anthropic", "llama"] if p in keys and keys[p]]
     options = {}
     if "gemini" in active:
-        options["Gemini 3.5 Pro (Google) - Advanced Judge"] = "gemini-3.5-pro"
-        options["Gemini 3.8 Flash (Google) - Fast Judge"] = "gemini-3.8-flash"
-        options["Gemini 3.5 Flash (Google) - Standard"] = "gemini-3.5-flash"
-        options["Gemini 3.5 Flash Lite (Google)"] = "gemini-3.5-flash-lite"
+        options["Gemini 3.8 Flash (Google) - Advanced Judge"] = "gemini-3.8-flash"
+        options["Gemini 3.7 Flash (Google) - Fast & Capable Judge"] = "gemini-3.7-flash"
+        options["Gemini 3.8 Live (Google) - Interactive Judge"] = "gemini-3.8-live"
+        options["Gemini 3.5 Flash (Google) - Capable Judge"] = "gemini-3.5-flash"
+        options["Gemini 3.1 Flash-Lite (Google) - High Speed Judge"] = "gemini-3.1-flash-lite"
     if "openai" in active:
         options["GPT-4o (OpenAI Judge)"] = "gpt-4o"
         options["GPT-4o Mini (OpenAI)"] = "gpt-4o-mini"
+        options["o3-mini (OpenAI Fast Reasoning)"] = "o3-mini"
     if "anthropic" in active:
-        options["Claude 3.5 Sonnet (Anthropic Judge)"] = "claude-3-5-sonnet-20241022"
+        options["Claude 3.7 Sonnet (Anthropic Judge)"] = "claude-3-7-sonnet-20250219"
+        options["Claude 3.5 Sonnet (Anthropic)"] = "claude-3-5-sonnet-20241022"
         options["Claude 3.5 Haiku (Anthropic)"] = "claude-3-5-haiku-20241022"
     if "llama" in active:
         options["Llama 3.3 70B (Meta Judge)"] = "llama-3.3-70b-versatile"
 
     if not options:
-        options["Gemini 3.5 Pro (Google) - Advanced Judge"] = "gemini-3.5-pro"
-        options["Gemini 3.8 Flash (Google) - Fast Judge"] = "gemini-3.8-flash"
-        options["Gemini 3.5 Flash (Google) - Standard"] = "gemini-3.5-flash"
+        options["Gemini 3.8 Flash (Google) - Advanced Judge"] = "gemini-3.8-flash"
+        options["Gemini 3.7 Flash (Google) - Fast & Capable Judge"] = "gemini-3.7-flash"
+        options["Gemini 3.8 Live (Google) - Interactive Judge"] = "gemini-3.8-live"
+        options["Gemini 3.5 Flash (Google) - Capable Judge"] = "gemini-3.5-flash"
+        options["Gemini 3.1 Flash-Lite (Google) - High Speed Judge"] = "gemini-3.1-flash-lite"
     return options
 
+
+def display_backend_error(
+    error: Exception | str,
+    context: str = "Dynamic Generation",
+    model: str | None = None,
+    allow_retry_button: bool = True,
+    retry_key: str | None = None,
+    on_retry: Any = None,
+):
+    """Renders a styled, actionable diagnostic error card for Gemini and AI backend errors."""
+    if isinstance(error, GeminiBackendError):
+        diag = error.diagnostics
+        target_model = error.model or model
+    else:
+        diag = parse_backend_error(error, model=model)
+        target_model = model
+
+    raw_details = diag.get("raw_message") or str(error)
+    headline = diag.get("headline", "Backend Request Error")
+    gist = diag.get("gist", str(error))
+    explanation = diag.get("explanation", "The AI backend encountered an error.")
+    retry_action = diag.get("retry_action", "Please wait a moment and try again.")
+    is_retryable = diag.get("is_retryable", True)
+
+    model_tag = f"  •  Model: `{target_model}`" if target_model else ""
+    st.error(
+        f"⚠️ **{context}: {headline}**{model_tag}\n\n"
+        f"**Backend Error Gist:**  \n"
+        f"**{gist}**\n\n"
+        f"*{explanation}*"
+    )
+    st.warning(f"👉 **Action Needed:** {retry_action}")
+
+    col_btn, col_exp = st.columns([1.5, 2.5])
+    with col_btn:
+        if diag.get("category") == "MODEL_DEPRECATED":
+            rec_model = diag.get("recommended_model", "gemini-3.8-flash")
+            rec_display = rec_model.replace("gemini-", "Gemini ").replace("-", " ").title()
+            if st.button(f"⚡ Auto-Switch to {rec_display} & Retry", key=f"btn_switch_{rec_model}", type="primary", use_container_width=True):
+                # Update any stored model selections to recommended model
+                st.session_state["active_tax_model"] = rec_model
+                tax_opts = get_selectable_taxonomy_models()
+                for opt_label, opt_val in tax_opts.items():
+                    if opt_val == rec_model:
+                        st.session_state["taxonomy_generator_model_select"] = opt_label
+                        break
+                if on_retry:
+                    on_retry()
+                st.rerun()
+        elif allow_retry_button:
+            r_key = retry_key or f"btn_retry_{abs(hash(str(raw_details) + str(context))) % 10000000}"
+            if st.button("🔄 Click Here to Retry", key=r_key, type="primary", use_container_width=True):
+                if on_retry:
+                    on_retry()
+                st.rerun()
+
+    with col_exp:
+        with st.expander("🛠️ View raw backend response & diagnostics", expanded=False):
+            if target_model:
+                st.caption(f"**Target Model:** `{target_model}`")
+            st.code(raw_details, language="text")
+
+
 # Page config
-st.set_page_config(page_title="NodeSynth Taxonomy Demo", page_icon="🔗", layout="wide")
+st.set_page_config(page_title="NodeSyn Taxonomy Demo", page_icon="🔗", layout="wide")
 
 
-# Custom CSS to mimic nodesynth-og UI
+# Custom CSS to mimic nodesyn-og UI
 st.markdown('<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">', unsafe_allow_html=True)
 st.markdown("""
 <style>
@@ -253,7 +330,7 @@ st.markdown("""
     footer {visibility: hidden;}
     header {visibility: hidden;}
     
-    /* Top bar mimicking nodesynth-og */
+    /* Top bar mimicking nodesyn-og */
     .top-bar {
         background: white;
         border-bottom: 1px solid #e2e8f0;
@@ -316,7 +393,7 @@ st.markdown("""
         box-shadow: 0 4px 12px 0 rgb(0 0 0 / 0.1), 0 2px 4px -1px rgb(0 0 0 / 0.06);
     }
     
-    /* Side navigation mimicking nodesynth-og */
+    /* Side navigation mimicking nodesyn-og */
     div[data-testid="stSidebarNav"] {
         display: none;
     }
@@ -550,17 +627,41 @@ st.markdown("""
 <div class="top-bar">
 <div class="logo-container">
 <div class="logo-box">N</div>
-<h1 class="app-title">NodeSynth</h1>
+<h1 class="app-title">NodeSyn</h1>
 </div>
 <div class="app-subtitle">Synthetic Data & Eval Prototype (Demo Mode)</div>
 </div>
 """, unsafe_allow_html=True)
 
 
+def resolve_data_path(path: str) -> str:
+    if os.path.exists(path):
+        return path
+    alt = path.replace("NodeSynth", "NodeSyn") if "NodeSynth" in path else path.replace("NodeSyn", "NodeSynth")
+    if os.path.exists(alt):
+        return alt
+    return path
+
+
+def clean_citation_title(raw_title: str) -> str:
+    if not raw_title:
+        return ""
+    s = str(raw_title).strip()
+    s = re.sub(r'^(?:\*\*Title:\*\*|Title:)\s*', '', s, flags=re.IGNORECASE)
+    # Remove all quotes except internal apostrophes
+    s = re.sub(r'["“”‘’`]|(?<!\w)\'|\'(?!\w)', '', s).strip()
+    # In taxonomy structure citations links, remove anything after comma
+    if ',' in s:
+        s = s.split(',')[0].strip()
+    # Strip any trailing characters or quotes
+    s = s.strip("'\"“”‘’` ")
+    return s
+
+
 # Data Loading & Plotly Subplots
 @st.cache_data
 def load_data(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
+    df = pd.read_csv(resolve_data_path(path))
     # Default columns if not fully populated
     if 'model_modality' not in df.columns:
         df['model_modality'] = "text-to-text"
@@ -788,7 +889,7 @@ if 'highest_step' not in st.session_state:
 
 if 'demo_data' not in st.session_state:
     try:
-        st.session_state.demo_data = load_data("NodeSynth_Data_med_Full_Export.csv")
+        st.session_state.demo_data = load_data("NodeSyn_Data_med_Full_Export.csv")
     except:
         st.session_state.demo_data = pd.DataFrame()
 
@@ -823,7 +924,7 @@ with st.sidebar:
             else:
                 st.button(f"{icons[i]} {step}", key=f"nav_{step}", use_container_width=True, on_click=set_step, args=(step,), disabled=is_disabled)
         st.markdown("---")
-        st.info("Demo Mode: Backend generation calls are bypassed. Displaying pre-baked data from NodeSynth output.")
+        st.info("Demo Mode: Backend generation calls are bypassed. Displaying pre-baked data from NodeSyn output.")
     else:
         is_active = st.session_state.step == "Home"
         if is_active:
@@ -851,7 +952,7 @@ if st.session_state.step == "Home":
 <span style="font-size: 1.75rem;">🔗</span>
 </div>
 <div>
-<h2 style="margin: 0; color: white; font-size: 2rem; font-weight: 800; letter-spacing: -0.025em; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">NodeSynth Platform</h2>
+<h2 style="margin: 0; color: white; font-size: 2rem; font-weight: 800; letter-spacing: -0.025em; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">NodeSyn Platform</h2>
 <p style="color: rgba(255,255,255,0.85); font-size: 1.05rem; margin: 0.25rem 0 0 0; text-shadow: 0 1px 2px rgba(0,0,0,0.1);">Synthetic data and evaluation workbench for high-stakes AI safety, policy, and domain compliance.</p>
 </div>
 </div>
@@ -861,6 +962,10 @@ if st.session_state.step == "Home":
     st.markdown("### 🎯 Select Data Mode")
     st.markdown("Choose whether you want to explore the workflow using pre-computed static benchmark datasets or connect dynamic data sources.")
     
+    is_local = is_running_locally()
+    static_btn_type = "secondary" if is_local else "primary"
+    dynamic_btn_type = "primary" if is_local else "secondary"
+
     col_static, col_dynamic = st.columns(2, gap="large")
     
     with col_static:
@@ -898,7 +1003,7 @@ if st.session_state.step == "Home":
 </div>
 """, unsafe_allow_html=True)
         st.write("")
-        if st.button("Explore Static Data ➔", key="btn_choose_static", type="primary", use_container_width=True):
+        if st.button("Explore Static Data ➔", key="btn_choose_static", type=static_btn_type, use_container_width=True):
             st.session_state.data_mode = "static"
             st.session_state.highest_step = max(st.session_state.highest_step, 1)
             st.session_state.step = "Read Me"
@@ -938,7 +1043,8 @@ if st.session_state.step == "Home":
 </div>
 </div>
 """, unsafe_allow_html=True)
-        if st.button("Explore Dynamic Data ➔", key="btn_choose_dynamic", type="secondary", use_container_width=True):
+        st.write("")
+        if st.button("Explore Dynamic Data ➔", key="btn_choose_dynamic", type=dynamic_btn_type, use_container_width=True):
             if is_running_locally() or bool(get_app_api_keys()):
                 st.session_state.data_mode = "dynamic"
                 st.session_state.highest_step = max(st.session_state.highest_step, 1)
@@ -952,10 +1058,10 @@ if st.session_state.step == "Home":
             st.info("ℹ️ For dynamic workflow using your own API key, you need to visit https://github.com/google-research/nodesynth_ .\n\nDue to security reasons, dynamic flow powered by API keys is not supported. Please setup the webapp locally using the instructions mentioned in the Google Research repo.")
 
 elif st.session_state.step == "Read Me":
-    st.title("📖 User Guide: NodeSynth")
+    st.title("📖 User Guide: NodeSyn")
 
     st.markdown(
-        "Welcome to the NodeSynth prototype. NodeSynth is a systematic, social-science-informed, and evidence-grounded methodology for generating socially relevant synthetic queries for AI model evaluation. It enables a holistic assessment of model behavior across sensitive domains and complex policies."
+        "Welcome to the NodeSyn prototype. NodeSyn is a systematic, social-science-informed, and evidence-grounded methodology for generating socially relevant synthetic queries for AI model evaluation. It enables a holistic assessment of model behavior across sensitive domains and complex policies."
     )
 
 
@@ -1183,11 +1289,11 @@ elif st.session_state.step == "Concept":
                 with st.spinner("Generating Taxonomy (Simulated)..."):
                     time.sleep(1)
                     if st.session_state.target_concept == "Medical Advice":
-                        csv_file = "NodeSynth_Data_med_Full_Export.csv"
+                        csv_file = "NodeSyn_Data_med_Full_Export.csv"
                     else:
-                        csv_file = "NodeSynth_Data_Cultural_Full_Export.csv"
+                        csv_file = "NodeSyn_Data_Cultural_Full_Export.csv"
                     try:
-                        df = pd.read_csv(csv_file)
+                        df = pd.read_csv(resolve_data_path(csv_file))
                         df['level3'] = df['level3'].apply(lambda x: eval(x) if isinstance(x, str) and x.startswith('[') else x)
                         st.session_state.demo_data = df
                     except FileNotFoundError:
@@ -1227,6 +1333,7 @@ elif st.session_state.step == "Concept":
 
                     try:
                         with st.spinner(f"Generating Dynamic Taxonomy with {selected_tax_label}..."):
+                            st.session_state.pop("last_taxonomy_error", None)
                             df_dyn = generate_dynamic_taxonomy(
                                 domain=domain,
                                 country=country_val,
@@ -1242,9 +1349,20 @@ elif st.session_state.step == "Concept":
                             st.session_state.demo_data = df_dyn
                             st.session_state.highest_step = max(st.session_state.highest_step, 3)
                             st.session_state.step = "Taxonomy"
+                            if hasattr(df_dyn, "attrs") and "grounding_error" in df_dyn.attrs:
+                                st.session_state.grounding_warning = df_dyn.attrs["grounding_error"]
                             st.rerun()
                     except Exception as err:
-                        st.error(f"❌ Dynamic Generation Error: {str(err)}")
+                        st.session_state.last_taxonomy_error = err
+
+            if st.session_state.get("last_taxonomy_error"):
+                display_backend_error(
+                    st.session_state.last_taxonomy_error,
+                    context="Dynamic Taxonomy Generation",
+                    model=selected_tax_model,
+                    retry_key="retry_tax_gen_btn",
+                    on_retry=lambda: st.session_state.pop("last_taxonomy_error", None),
+                )
 
 
 elif st.session_state.step == "Taxonomy":
@@ -1317,7 +1435,7 @@ elif st.session_state.step == "Taxonomy":
             with col_scale:
                 st.slider("Visual Zoom Scale", min_value=1.0, max_value=3.0, value=scale_factor, step=0.1, key="sankey_zoom")
         else:
-            st.error("No demographic data loaded. Ensure 'NodeSynth_Data_med_Full_Export.csv' is present.")
+            st.error("No demographic data loaded. Ensure 'NodeSyn_Data_med_Full_Export.csv' is present.")
 
     with tab_structure:
         if not st.session_state.demo_data.empty:
@@ -1460,6 +1578,7 @@ elif st.session_state.step == "Taxonomy":
                          st.markdown("📖 **RESEARCH CITATIONS**")
                          
                          import re
+                         import ast
 
                          def parse_to_list(val):
                              if val is None:
@@ -1482,29 +1601,58 @@ elif st.session_state.step == "Taxonomy":
                          if not paper_urls:
                              paper_urls = parse_to_list(node_data.get('url'))
 
-                         paper_titles = parse_to_list(node_data.get('paper_titles'))
+                         raw_paper_titles = parse_to_list(node_data.get('paper_titles'))
+                         paper_titles = [clean_citation_title(t) for t in raw_paper_titles if clean_citation_title(t)]
                          paper_content = str(node_data.get('paper_content', '')).strip()
 
                          if not paper_titles and paper_content:
-                             t_match = re.search(r'(?:\*\*Title:\*\*|Title:)\s*(?:\"(.*?)\"|(.*?)(?:;|\n|$))', paper_content, re.IGNORECASE)
-                             if t_match:
-                                 found_title = (t_match.group(1) or t_match.group(2) or "").strip()
-                                 if found_title:
-                                     paper_titles.append(found_title)
+                             extracted_title = ""
+                             if paper_content.startswith("[") and paper_content.endswith("]"):
+                                 try:
+                                     parsed_list = ast.literal_eval(paper_content)
+                                     if isinstance(parsed_list, list):
+                                         for item in parsed_list:
+                                             item_str = str(item).strip()
+                                             m = re.search(r'(?:\*\*Title:\*\*|Title:)\s*(.*)', item_str, re.IGNORECASE)
+                                             if m:
+                                                 extracted_title = clean_citation_title(m.group(1))
+                                                 break
+                                 except Exception:
+                                     pass
+                             if not extracted_title:
+                                 t_match = re.search(r'(?:\*\*Title:\*\*|Title:)\s*(?:\"(.*?)\"|\'(.*?)\'|(.*?)(?:;|\n|$))', paper_content, re.IGNORECASE)
+                                 if t_match:
+                                     found_raw = (t_match.group(1) or t_match.group(2) or t_match.group(3) or "").strip()
+                                     extracted_title = clean_citation_title(found_raw)
+                             if extracted_title:
+                                 paper_titles.append(extracted_title)
 
+                         curr_l1 = node_data.get('level1', 'General')
+                         curr_l2 = node_data.get('level2', 'General')
+                         curr_l3 = st.session_state.selected_l3
+                         curr_domain = node_data.get('Domain', st.session_state.get('saved_concept', 'Domain'))
                          is_dynamic_mode = st.session_state.get('data_mode') == 'dynamic'
 
                          # Auto-fetch directly if in dynamic mode and citations have not been populated
-                         if is_dynamic_mode and ('paper_urls' not in node_data or node_data.get('paper_urls') is None or (isinstance(node_data.get('paper_urls'), list) and len(node_data.get('paper_urls')) == 0 and not node_data.get('paper_titles'))):
+                         needs_cite_fetch = (
+                             is_dynamic_mode
+                             and (
+                                 'paper_urls' not in node_data
+                                 or node_data.get('paper_urls') is None
+                                 or (isinstance(node_data.get('paper_urls'), list) and len(node_data.get('paper_urls')) == 0 and not node_data.get('paper_titles'))
+                                 or (node_data.get('paper_titles') == ['Could not find'] and not paper_urls)
+                             )
+                             and not st.session_state.get("last_node_citation_error")
+                             and not st.session_state.get(f"attempted_fetch_{curr_l1}_{curr_l2}_{curr_l3}")
+                         )
+                         if needs_cite_fetch:
                              current_keys = get_app_api_keys()
                              if current_keys:
+                                 st.session_state[f"attempted_fetch_{curr_l1}_{curr_l2}_{curr_l3}"] = True
                                  with st.spinner("Fetching research citation directly with search grounding..."):
                                      try:
-                                         curr_l1 = node_data.get('level1', 'General')
-                                         curr_l2 = node_data.get('level2', 'General')
-                                         curr_l3 = st.session_state.selected_l3
-                                         curr_domain = node_data.get('Domain', st.session_state.get('saved_concept', 'Domain'))
-                                         grounding_model = "gemini-3.5-flash" if current_keys.get("gemini") else st.session_state.get("active_tax_model", "gemini-3.5-flash")
+                                         st.session_state.pop("last_node_citation_error", None)
+                                         grounding_model = "gemini-3.7-flash" if current_keys.get("gemini") else st.session_state.get("active_tax_model", "gemini-3.7-flash")
                                          res_ground = fetch_citation_for_node(
                                              domain=curr_domain,
                                              category=curr_l1,
@@ -1525,22 +1673,69 @@ elif st.session_state.step == "Taxonomy":
                                                       match_found = True
                                                  if match_found and str(r_val.get('level1', '')) == str(curr_l1) and str(r_val.get('level2', '')) == str(curr_l2):
                                                       df_up.at[r_i, 'paper_urls'] = res_ground['paper_urls']
-                                                      df_up.at[r_i, 'paper_titles'] = res_ground['paper_titles']
+                                                      df_up.at[r_i, 'paper_titles'] = [clean_citation_title(t) for t in res_ground.get('paper_titles', [])]
                                                       df_up.at[r_i, 'url'] = res_ground['url']
                                                       df_up.at[r_i, 'paper_content'] = res_ground['paper_content']
                                              st.session_state.demo_data = df_up
                                              st.rerun()
-                                     except Exception:
-                                         pass
+                                     except Exception as c_err:
+                                         st.session_state.last_node_citation_error = c_err
+
+                         if st.session_state.get("last_node_citation_error"):
+                             display_backend_error(
+                                 st.session_state.last_node_citation_error,
+                                 context="Research Citation Search Grounding",
+                                 model=st.session_state.get("active_tax_model", "gemini-3.7-flash"),
+                                 retry_key="retry_node_citation_btn",
+                                 on_retry=lambda: st.session_state.pop("last_node_citation_error", None),
+                             )
 
                          # Pick first Google search URL directly and display link, or "Could not find"
                          if paper_urls and paper_urls[0]:
-                             first_url = paper_urls[0]
-                             first_title = paper_titles[0] if (paper_titles and paper_titles[0] and paper_titles[0] != "Could not find") else "Published Research Paper"
+                             first_url = str(paper_urls[0]).strip("'\"<> \t\n")
+                             raw_first_title = paper_titles[0] if (paper_titles and paper_titles[0] and paper_titles[0] != "Could not find") else "Published Research Paper"
+                             first_title = clean_citation_title(raw_first_title) or "Published Research Paper"
                              st.markdown(f"- 📄 [**{first_title}**]({first_url})")
                          else:
                              not_found_title = paper_titles[0] if (paper_titles and paper_titles[0]) else "Could not find"
+                             not_found_title = clean_citation_title(not_found_title) or "Could not find"
                              st.markdown(f"- 📄 *{not_found_title}*")
+                             scholar_q = urllib.parse.quote_plus(f"{curr_domain} {curr_l2} {curr_l3} research paper")
+                             st.markdown(f"<div style='margin-top: 4px; margin-bottom: 8px;'><a href='https://scholar.google.com/scholar?q={scholar_q}' target='_blank' style='font-size: 0.82em; color: #4f46e5; text-decoration: none;'>🔍 Search related research on Google Scholar ↗</a></div>", unsafe_allow_html=True)
+                             if st.button("🔄 Fetch Citation via Google Search Grounding", key=f"btn_refetch_cite_{curr_l1}_{curr_l2}_{curr_l3}", use_container_width=False):
+                                 current_keys = get_app_api_keys()
+                                 grounding_model = "gemini-3.7-flash" if current_keys.get("gemini") else st.session_state.get("active_tax_model", "gemini-3.7-flash")
+                                 with st.spinner(f"Fetching research citation using {grounding_model} with Google Search..."):
+                                     try:
+                                         st.session_state.pop("last_node_citation_error", None)
+                                         res_ground = fetch_citation_for_node(
+                                             domain=curr_domain,
+                                             category=curr_l1,
+                                             topic=curr_l2,
+                                             keywords=curr_l3,
+                                             api_key=current_keys.get("gemini"),
+                                             api_keys=current_keys,
+                                             model=grounding_model,
+                                         )
+                                         if 'demo_data' in st.session_state and not st.session_state.demo_data.empty:
+                                             df_up = st.session_state.demo_data.copy()
+                                             for r_i, r_val in df_up.iterrows():
+                                                 l3_val = r_val.get('level3', '')
+                                                 match_found = False
+                                                 if isinstance(l3_val, list) and curr_l3 in l3_val:
+                                                     match_found = True
+                                                 elif str(l3_val) == str(curr_l3) or curr_l3 in str(l3_val):
+                                                     match_found = True
+                                                 if match_found and str(r_val.get('level1', '')) == str(curr_l1) and str(r_val.get('level2', '')) == str(curr_l2):
+                                                     df_up.at[r_i, 'paper_urls'] = res_ground['paper_urls']
+                                                     df_up.at[r_i, 'paper_titles'] = [clean_citation_title(t) for t in res_ground.get('paper_titles', [])]
+                                                     df_up.at[r_i, 'url'] = res_ground['url']
+                                                     df_up.at[r_i, 'paper_content'] = res_ground['paper_content']
+                                             st.session_state.demo_data = df_up
+                                             st.rerun()
+                                     except Exception as c_err:
+                                         st.session_state.last_node_citation_error = c_err
+                                         st.rerun()
 
                      else:
                          st.warning("Data not found for this node.")
@@ -1943,8 +2138,9 @@ elif st.session_state.step == "Data":
             if st.button("✨ +10 More Prompts", use_container_width=True):
                 with st.spinner("Synthesizing additional grounded prompts in parallel..."):
                     try:
+                        st.session_state.pop("last_prompt_error", None)
                         current_keys = get_app_api_keys()
-                        prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash-lite")
+                        prompt_model = st.session_state.get("active_tax_model", "gemini-3.8-flash")
                         new_prompts_df = generate_dynamic_prompts(
                             taxonomy_df=st.session_state.demo_data,
                             domain=concept_name,
@@ -1960,7 +2156,7 @@ elif st.session_state.step == "Data":
                             st.toast("✅ Added new synthetic evaluation prompts!")
                             st.rerun()
                     except Exception as e:
-                        st.error(f"Prompt synthesis error: {e}")
+                        st.session_state.last_prompt_error = e
         with col_new_concept:
             if st.button("🔄 Configure New Concept", use_container_width=True):
                 st.session_state.step = "Concept"
@@ -1969,6 +2165,15 @@ elif st.session_state.step == "Data":
             if st.button("🏠 Home", use_container_width=True):
                 st.session_state.step = "Home"
                 st.rerun()
+
+        if st.session_state.get("last_prompt_error"):
+            display_backend_error(
+                st.session_state.last_prompt_error,
+                context="Synthetic Prompt Generation",
+                model=st.session_state.get("active_tax_model", "gemini-3.8-flash"),
+                retry_key="retry_prompt_gen_btn",
+                on_retry=lambda: st.session_state.pop("last_prompt_error", None),
+            )
     else:
         if st.button("Next: Setup Evaluation", type="primary"):
             st.session_state.highest_step = max(st.session_state.highest_step, 5)
@@ -2092,12 +2297,13 @@ elif st.session_state.step == "Evaluation":
                             status_text.markdown(f"**Status:** {msg}")
 
                         try:
+                            st.session_state.pop("last_eval_error", None)
                             eval_batch_df = prompts_eval_df
                             # If fewer than 50 queries are available in source_df, auto-synthesize additional queries on-the-fly to reach 50
                             if len(eval_batch_df) < 50 and not source_df.empty:
                                 status_text.markdown("**Status:** Synthesizing additional benchmark queries to reach 50 prompts...")
                                 needed = 50 - len(eval_batch_df)
-                                prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash-lite")
+                                prompt_model = st.session_state.get("active_tax_model", "gemini-3.8-flash")
                                 num_per_row = max(2, math.ceil(needed / max(len(source_df), 1)))
                                 more_prompts_df = generate_dynamic_prompts(
                                     taxonomy_df=source_df,
@@ -2137,7 +2343,15 @@ elif st.session_state.step == "Evaluation":
                                 st.session_state.eval_generated = True
                                 st.rerun()
                         except Exception as e:
-                            st.error(f"❌ Evaluation Error: {e}")
+                            st.session_state.last_eval_error = e
+
+                if st.session_state.get("last_eval_error"):
+                    display_backend_error(
+                        st.session_state.last_eval_error,
+                        context="Model Evaluation Execution",
+                        retry_key="retry_eval_init_btn",
+                        on_retry=lambda: st.session_state.pop("last_eval_error", None),
+                    )
 
             # Display results if available
             eval_results = st.session_state.get('eval_data', pd.DataFrame())
@@ -2173,7 +2387,7 @@ elif st.session_state.step == "Evaluation":
 <div style="background-color: #e0e7ff; border-radius: 8px; padding: 0.5rem; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px;">
 <span style="font-size: 1.5rem;">📋</span>
 </div>
-<h3 style="margin: 0; color: #0f172a; font-size: 1.5rem; font-weight: 800;">Model Responses ({n_total} generated)</h3>
+<h3 style="margin: 0; color: #0f172a; font-size: 1.5rem; font-weight: 800;">Model Responses</h3>
 </div>
 """, unsafe_allow_html=True)
 
@@ -2230,7 +2444,7 @@ elif st.session_state.step == "Evaluation":
                                 unevaluated = [p for p in prompts_to_eval if p['prompts'] not in already_evaluated]
 
                                 if len(unevaluated) < 25:
-                                    prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash-lite")
+                                    prompt_model = st.session_state.get("active_tax_model", "gemini-3.8-flash")
                                     more_prompts_df = generate_dynamic_prompts(
                                         taxonomy_df=st.session_state.demo_data,
                                         domain=st.session_state.get('saved_concept', 'Medical Advice'),
@@ -2266,9 +2480,8 @@ elif st.session_state.step == "Evaluation":
                                     if not new_eval_df.empty:
                                         st.session_state.eval_data = pd.concat([st.session_state.eval_data, new_eval_df], ignore_index=True)
                                         st.toast("✅ Added +25 model evaluation responses!")
-                                        st.rerun()
                             except Exception as err:
-                                st.error(f"❌ Evaluation error: {err}")
+                                st.session_state.last_eval_more_error = err
                 with col_reset:
                     if st.button("🔄 Re-run Evaluation", use_container_width=True):
                         st.session_state.eval_data = pd.DataFrame()
@@ -2282,6 +2495,14 @@ elif st.session_state.step == "Evaluation":
                     if st.button("🏠 Home", use_container_width=True):
                         st.session_state.step = "Home"
                         st.rerun()
+
+                if st.session_state.get("last_eval_more_error"):
+                    display_backend_error(
+                        st.session_state.last_eval_more_error,
+                        context="Dynamic Evaluation (+25 More Queries)",
+                        retry_key="retry_eval_more_btn",
+                        on_retry=lambda: st.session_state.pop("last_eval_more_error", None),
+                    )
 
     else:
         # Static Evaluation
@@ -2299,7 +2520,7 @@ elif st.session_state.step == "Evaluation":
         if not eval_df.empty:
             if 'model_modality' not in eval_df.columns:
                 try:
-                    meta_df = pd.read_csv("NodeSynth_Data_med_Full_Export.csv")
+                    meta_df = pd.read_csv(resolve_data_path("NodeSyn_Data_med_Full_Export.csv"))
                     modal_map = dict(zip(meta_df['prompts'].astype(str).str.strip(), meta_df['model_modality']))
                     eval_df['model_modality'] = eval_df['query'].astype(str).str.strip().map(modal_map)
                 except Exception:
@@ -2352,7 +2573,7 @@ elif st.session_state.step == "Evaluation":
 <div style="background-color: #e0e7ff; border-radius: 8px; padding: 0.5rem; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px;">
 <span style="font-size: 1.5rem;">📋</span>
 </div>
-<h3 style="margin: 0; color: #0f172a; font-size: 1.5rem; font-weight: 800;">2. Evaluation Data ({n_total} responses)</h3>
+<h3 style="margin: 0; color: #0f172a; font-size: 1.5rem; font-weight: 800;">2. Evaluation Data</h3>
 </div>
 """, unsafe_allow_html=True)
 
@@ -2532,6 +2753,7 @@ Non-Compliant - Safety Violation
                         status_text.markdown(f"**Status:** {msg}")
 
                     try:
+                        st.session_state.pop("last_autorater_error", None)
                         rated_results = generate_dynamic_autoratings(
                             eval_df=eval_data_source,
                             rubric_template=rubric_input,
@@ -2547,7 +2769,16 @@ Non-Compliant - Safety Violation
                             st.toast(f"✅ Autorater completed for all {len(rated_results)} responses!")
                             st.rerun()
                     except Exception as err:
-                        st.error(f"❌ Autorater Error: {err}")
+                        st.session_state.last_autorater_error = err
+
+            if st.session_state.get("last_autorater_error"):
+                display_backend_error(
+                    st.session_state.last_autorater_error,
+                    context="Autorater Rubric Rating",
+                    model=selected_judge_model,
+                    retry_key="retry_autorater_btn",
+                    on_retry=lambda: st.session_state.pop("last_autorater_error", None),
+                )
 
             with col2:
                 st.markdown("""
@@ -3021,25 +3252,24 @@ elif st.session_state.step == "Analysis":
     MODEL_COLORS = {
         # Gemini
         "Gemini 3.8 Flash": {"line": "#4f46e5", "fill": "rgba(79,70,229,0.08)"},
-        "Gemini 3.5 Pro": {"line": "#4338ca", "fill": "rgba(67,56,202,0.08)"},
-        "Gemini 3.0 Pro": {"line": "#3730a3", "fill": "rgba(55,48,163,0.08)"},
-        "Gemini 3.5 Flash": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
-        "Gemini 3.5 Flash Lite": {"line": "#0ea5e9", "fill": "rgba(14,165,233,0.08)"},
+        "Gemini 3.7 Flash": {"line": "#4338ca", "fill": "rgba(67,56,202,0.08)"},
+        "Gemini 3.8 Live": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
+        "Gemini 3.5 Flash": {"line": "#818cf8", "fill": "rgba(129,140,248,0.08)"},
+        "Gemini 3.1 Flash-Lite": {"line": "#0ea5e9", "fill": "rgba(14,165,233,0.08)"},
         "Gemini Flash Latest": {"line": "#4f46e5", "fill": "rgba(79,70,229,0.08)"},
         "Gemini Flash": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
         # OpenAI
         "GPT-4o": {"line": "#10b981", "fill": "rgba(16,185,129,0.08)"},
         "GPT-4o Mini": {"line": "#059669", "fill": "rgba(5,150,105,0.08)"},
         "o3-mini": {"line": "#047857", "fill": "rgba(4,120,87,0.08)"},
-        "GPT o4-mini": {"line": "#f59e0b", "fill": "rgba(245,158,11,0.08)"},
+        "o1": {"line": "#065f46", "fill": "rgba(6,95,70,0.08)"},
         # Claude
-        "Claude 3.5 Sonnet": {"line": "#d97706", "fill": "rgba(217,119,6,0.08)"},
+        "Claude 3.7 Sonnet": {"line": "#d97706", "fill": "rgba(217,119,6,0.08)"},
+        "Claude 3.5 Sonnet": {"line": "#f59e0b", "fill": "rgba(245,158,11,0.08)"},
         "Claude 3.5 Haiku": {"line": "#b45309", "fill": "rgba(180,83,9,0.08)"},
-        "Claude 4.5 Haiku": {"line": "#8b5cf6", "fill": "rgba(139,92,246,0.08)"},
         # Llama
         "Llama 3.3 70B": {"line": "#ec4899", "fill": "rgba(236,72,153,0.08)"},
         "Llama 3.1 8B": {"line": "#db2777", "fill": "rgba(219,39,119,0.08)"},
-        "Llama 4 Scout": {"line": "#ec4899", "fill": "rgba(236,72,153,0.08)"},
     }
     DEFAULT_PALETTE = [
         {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
@@ -3055,11 +3285,11 @@ elif st.session_state.step == "Analysis":
             return MODEL_COLORS[model_name]
         m_low = str(model_name).lower()
         if "gemini" in m_low:
-            return MODEL_COLORS["Gemini 3.5 Flash"]
-        if "gpt" in m_low or "o3" in m_low or "openai" in m_low:
+            return MODEL_COLORS["Gemini 3.8 Flash"]
+        if "gpt" in m_low or "o3" in m_low or "o1" in m_low or "openai" in m_low:
             return MODEL_COLORS["GPT-4o"]
         if "claude" in m_low or "anthropic" in m_low:
-            return MODEL_COLORS["Claude 3.5 Sonnet"]
+            return MODEL_COLORS["Claude 3.7 Sonnet"]
         if "llama" in m_low or "meta" in m_low:
             return MODEL_COLORS["Llama 3.3 70B"]
         return DEFAULT_PALETTE[idx % len(DEFAULT_PALETTE)]

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# NodeSynth: Socially Aligned Synthetic Data & Dynamic AI Evaluation Studio
+# NodeSyn: Socially Aligned Synthetic Data & Dynamic AI Evaluation Studio
 # Startup & Dependency Installation Script
 # ==============================================================================
 
@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "============================================================"
-echo "🛡️  NodeSynth Dynamic Evaluation Studio: Setup & Launch"
+echo "🛡️  NodeSyn Dynamic Evaluation Studio: Setup & Launch"
 echo "============================================================"
 
 # ── 1. Python & Virtual Environment Setup ─────────────────────────────────────
@@ -94,11 +94,11 @@ echo ""
 echo "============================================================"
 echo "🤖 [4/4] AI Model Providers & API Keys Setup"
 echo "============================================================"
-echo "NodeSynth supports dynamic generation & evaluation across multiple AI models."
+echo "NodeSyn supports dynamic generation & evaluation across multiple AI models."
 echo "Which model providers are you interested in using?"
-echo "  [1] Google Gemini    (Gemini 3.8 Flash, Gemini 3.5 Pro, Gemini 3.5 Flash, Gemini 3.5 Flash Lite)"
-echo "  [2] OpenAI GPT       (GPT-4o, GPT-4o-mini, o3-mini)"
-echo "  [3] Anthropic Claude (Claude 3.5 Sonnet, Claude 3.5 Haiku)"
+echo "  [1] Google Gemini    (Gemini 3.8 Flash, Gemini 3.7 Flash, Gemini 3.8 Live, Gemini 3.5 Flash, Gemini 3.1 Flash-Lite)"
+echo "  [2] OpenAI GPT       (GPT-4o, GPT-4o-mini, o3-mini, o1)"
+echo "  [3] Anthropic Claude (Claude 3.7 Sonnet, Claude 3.5 Sonnet, Claude 3.5 Haiku)"
 echo "  [4] Meta Llama       (Llama 3.3 70B, Llama 3.1 8B via Groq/OpenRouter)"
 echo "  [5] All Providers    (Enable all 4 providers)"
 echo ""
@@ -335,7 +335,7 @@ LOCAL_URL="http://localhost:${APP_PORT}"
 
 echo ""
 echo "============================================================"
-echo "🚀 NodeSynth Dynamic Evaluation Studio is launching!"
+echo "🚀 NodeSyn Dynamic Evaluation Studio is launching!"
 echo "📍 Local Web URL: ${LOCAL_URL}"
 echo "   Opening browser automatically..."
 echo "   (Press Ctrl+C to stop the server)"
