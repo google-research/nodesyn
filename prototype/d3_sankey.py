@@ -207,7 +207,7 @@ function render(){{
     .on('mouseout',()=>{{tip.style.opacity=0}});
 
   /* Labels via foreignObject — positioned relative to group */
-  const isLabelRight = d => (d.level === 'level3' || d.level === 'level2' || d.level === 'level1' || d.level === 'Domain' || d.x0 < W/2);
+  const isLabelRight = d => (d.level === 'level3' || d.level === 'level2' || d.level === 'level1' || d.level === 'Domain' || (d.depth !== undefined && d.depth <= 3) || d.x0 < W/2);
   const labels=ng.append('foreignObject')
     .attr('x',d=>isLabelRight(d)?d.x1-d.x0+8:-172)
     .attr('y',d=>(d.y1-d.y0)/2-18)

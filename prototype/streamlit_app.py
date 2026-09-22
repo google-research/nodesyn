@@ -15,6 +15,8 @@ import textwrap
 import urllib.parse
 from typing import Any
 import importlib
+import d3_sankey
+importlib.reload(d3_sankey)
 from d3_sankey import create_d3_sankey_html
 import gemini_backend
 importlib.reload(gemini_backend)
