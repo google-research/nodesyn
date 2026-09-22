@@ -450,6 +450,7 @@ class MultiModelUtils:
             "top_p": 0.95,
             "temperature": 0.1,
             "safety_settings": _SAFETY_SETTINGS,
+            "automatic_function_calling": types.AutomaticFunctionCallingConfig(disable=True),
         }
         if tools:
             config_kwargs["tools"] = tools
