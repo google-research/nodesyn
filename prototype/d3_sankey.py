@@ -122,17 +122,6 @@ const H = {height} * scale;
 const mg={{top:8,right:210,bottom:8,left:12}};
 let activeFilters={{}};
 
-function takesMoreThan2Lines(text, maxChars = 22) {{
-  const words = String(text || '').split(/\\s+/);
-  let lines = 1, curLen = 0;
-  for (const w of words) {{
-    if (curLen === 0) {{ curLen = w.length; }}
-    else if (curLen + 1 + w.length <= maxChars) {{ curLen += 1 + w.length; }}
-    else {{ lines++; curLen = w.length; }}
-  }}
-  return lines > 2;
-}}
-
 /* Build filter dropdowns */
 const fd=document.getElementById('filters');
 filterCfg.forEach(f=>{{
@@ -210,14 +199,14 @@ function render(){{
   const isLabelRight = d => (d.level === 'level3' || d.level === 'level2' || d.level === 'level1' || d.level === 'Domain' || (d.depth !== undefined && d.depth <= 3) || d.x0 < W/2);
   const labels=ng.append('foreignObject')
     .attr('x',d=>isLabelRight(d)?d.x1-d.x0+8:-172)
-    .attr('y',d=>(d.y1-d.y0)/2-18)
-    .attr('width',165).attr('height',40);
+    .attr('y',d=>(d.y1-d.y0)/2-24)
+    .attr('width',165).attr('height',48);
   labels.append('xhtml:div').attr('class','node-label')
     .style('text-align',d=>isLabelRight(d)?'left':'right')
     .style('display','flex').style('align-items','center')
     .style('height','100%')
     .style('justify-content',d=>isLabelRight(d)?'flex-start':'flex-end')
-    .text(d=>takesMoreThan2Lines(d.name) ? '' : d.name);
+    .text(d=>d.name);
 
   /* Helper: move a node group to its current y0 position */
   function applyTransform(sel, animate){{
