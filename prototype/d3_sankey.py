@@ -119,7 +119,7 @@ const levelLabels={json.dumps({c: c.replace('cleaned_Country','Country').replace
 const scale = {scale_factor};
 const W = Math.max(document.documentElement.clientWidth - 20, 1500) * scale;
 const H = {height} * scale;
-const mg={{top:8,right:180,bottom:8,left:12}};
+const mg={{top:8,right:210,bottom:8,left:12}};
 let activeFilters={{}};
 
 function takesMoreThan2Lines(text, maxChars = 22) {{
@@ -207,15 +207,16 @@ function render(){{
     .on('mouseout',()=>{{tip.style.opacity=0}});
 
   /* Labels via foreignObject — positioned relative to group */
+  const isLabelRight = d => (d.level === 'level3' || d.level === 'level2' || d.level === 'level1' || d.level === 'Domain' || d.x0 < W/2);
   const labels=ng.append('foreignObject')
-    .attr('x',d=>d.x0<W/2?d.x1-d.x0+8:-172)
+    .attr('x',d=>isLabelRight(d)?d.x1-d.x0+8:-172)
     .attr('y',d=>(d.y1-d.y0)/2-18)
     .attr('width',165).attr('height',40);
   labels.append('xhtml:div').attr('class','node-label')
-    .style('text-align',d=>d.x0<W/2?'left':'right')
+    .style('text-align',d=>isLabelRight(d)?'left':'right')
     .style('display','flex').style('align-items','center')
     .style('height','100%')
-    .style('justify-content',d=>d.x0<W/2?'flex-start':'flex-end')
+    .style('justify-content',d=>isLabelRight(d)?'flex-start':'flex-end')
     .text(d=>takesMoreThan2Lines(d.name) ? '' : d.name);
 
   /* Helper: move a node group to its current y0 position */
