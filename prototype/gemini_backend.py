@@ -5,6 +5,7 @@ import dataclasses
 import json
 import logging
 import os
+import random
 import re
 import textwrap
 import time
@@ -238,8 +239,20 @@ def parse_backend_error(
             "headline": "Request Preempted from Queue",
             "gist": "Preempted out of decode queue by a higher priority request.",
             "explanation": "Google's Gemini backend server reached transient concurrency limits and evicted this request to prioritize higher-tier traffic.",
-            "retry_action": "Please retry your request now. If the issue recurs during peak traffic, consider switching to Gemini 3.8 Flash or Gemini 3.7 Flash.",
+            "retry_action": "Please retry your request now. If the issue recurs during peak traffic, consider switching to Gemini 3.5 Flash or Gemini 3.1 Flash-Lite.",
             "is_retryable": True,
+            "raw_message": clean_text,
+        }
+
+    # Check 2b: Unsupported Mode (WebSocket / bidiGenerateContent only)
+    if "bidigeneratecontent" in lower_text or "only supports real-time bidirectional streaming" in lower_text:
+        return {
+            "category": "UNSUPPORTED_MODE",
+            "headline": "WebSocket-Only Streaming Model",
+            "gist": "models/gemini-3.8-live only supports real-time bidirectional streaming via WebSocket (bidiGenerateContent).",
+            "explanation": "Gemini 3.8 Live is designed for interactive audio/video sessions over WebSockets and does not support standard generateContent REST calls.",
+            "retry_action": "Please select Gemini 3.8 Flash, Gemini 3.7 Flash, Gemini 3.5 Flash, or Gemini 3.1 Flash-Lite.",
+            "is_retryable": False,
             "raw_message": clean_text,
         }
 
@@ -521,7 +534,7 @@ class MultiModelUtils:
     ) -> GenerateContentResult:
         """Calls appropriate model provider with short retry logic."""
         provider = self.get_model_provider(model)
-        retries = 2
+        retries = 3
         last_error = None
         for i in range(retries):
             try:
@@ -544,10 +557,14 @@ class MultiModelUtils:
                 last_error = e
                 logging.warning("Attempt %d/%d for [%s] failed with error: %s", i + 1, retries, model, str(e))
                 err_str = str(e).lower()
-                if any(fatal in err_str for fatal in ["404", "not found", "not_found", "api_key", "permission_denied", "no longer available", "deprecated"]):
+                if any(fatal in err_str for fatal in [
+                    "404", "not found", "not_found", "api_key", "permission_denied",
+                    "no longer available", "deprecated", "only supports real-time bidirectional streaming"
+                ]):
                     break
                 if i < retries - 1:
-                    time.sleep(1.0)
+                    sleep_time = min(5.0, 1.2 * (2 ** i) + random.uniform(0.2, 0.6))
+                    time.sleep(sleep_time)
                 else:
                     break
 
@@ -563,7 +580,7 @@ class MultiModelUtils:
         requests: list[GenerateContentRequest],
         model: str = "gemini-3.8-flash",
         tools: list[dict[str, Any]] | None = None,
-        max_workers: int = 10,
+        max_workers: int = 5,
         raise_for_status: bool = True,
     ) -> list[GenerateContentResult]:
         """Calls model generate_content in parallel across workers."""
@@ -572,9 +589,10 @@ class MultiModelUtils:
         results: list[GenerateContentResult] = []
         with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             tasks_futures = {}
+            stagger = 0.2 if tools else 0.03
             for item in requests:
                 tasks_futures[executor.submit(self.generate_content, item, model, tools, False)] = item
-                time.sleep(0.02)
+                time.sleep(stagger)
 
             for future in futures.as_completed(tasks_futures):
                 req = tasks_futures[future]
@@ -842,8 +860,8 @@ class KeywordsGenerator:
             )
             requests.append(req)
 
-        # Single batch call with 10 parallel workers
-        batch_results = self._gemini_utils.generate_content_batch(requests, model=model, max_workers=10)
+        # Single batch call with 5 parallel workers
+        batch_results = self._gemini_utils.generate_content_batch(requests, model=model, max_workers=5)
         
         GLOBAL_COUNTRIES_FALLBACK = [
             "United States", "India", "Nigeria", "United Kingdom", "Germany",
@@ -1044,7 +1062,7 @@ class PromptsGenerator:
             )
             requests.append(req)
         
-        batch_results = self._gemini_utils.generate_content_batch(requests, model=model, max_workers=10)
+        batch_results = self._gemini_utils.generate_content_batch(requests, model=model, max_workers=5)
         
         exploded_rows = []
         for res in batch_results:
@@ -1248,7 +1266,8 @@ class CredibleSourceGenerator:
                 "keywords": kw_str,
             },
         )
-        candidate_models = [model] + [m for m in ["gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"] if m != model]
+        fallback_models = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3.8-flash"]
+        candidate_models = [model] + [m for m in fallback_models if m != model]
         last_error = None
         fallback_parsed = None
 
@@ -1290,8 +1309,8 @@ class CredibleSourceGenerator:
         self,
         taxonomy_df: pd.DataFrame,
         domain: str,
-        model: str = "gemini-3.7-flash",
-        max_workers: int = 10,
+        model: str = "gemini-3.5-flash",
+        max_workers: int = 5,
     ) -> pd.DataFrame:
         """Grounds all rows in taxonomy_df with credible research papers using Google Search.
         If one model fails or is rate-limited, remaining rows are retried with fallback models.
@@ -1322,7 +1341,8 @@ class CredibleSourceGenerator:
             requests.append(req)
             row_indices.append(idx)
 
-        candidate_models = [model] + [m for m in ["gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"] if m != model]
+        fallback_models = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3.8-flash"]
+        candidate_models = [model] + [m for m in fallback_models if m != model]
         results_by_idx: dict[int, GenerateContentResult] = {}
         pending_requests = list(requests)
 
@@ -1409,7 +1429,7 @@ def generate_credible_sources(
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
     model: str = "gemini-3.7-flash",
-    max_workers: int = 10,
+    max_workers: int = 5,
 ) -> pd.DataFrame:
     """Grounds taxonomy branches with credible research papers using Google Search."""
     client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
@@ -1522,15 +1542,20 @@ def generate_dynamic_taxonomy(
     if progress_callback:
         progress_callback(0.85, f"Discovering research paper citations for {len(final_df)} taxonomy branches...")
 
-    # Grounding: Prefer Gemini 3.7 Flash for Google Search grounding if Gemini key available, else use selected model
-    grounding_model = "gemini-3.7-flash" if ai_client._api_keys.get("gemini") else model
+    # Grounding: Respect selected model if it is a Gemini model, else fallback to available Gemini key or model
+    if model and ai_client.get_model_provider(model) == "gemini":
+        grounding_model = model
+    elif ai_client._api_keys.get("gemini"):
+        grounding_model = "gemini-3.5-flash"
+    else:
+        grounding_model = model
     credible_gen = CredibleSourceGenerator(ai_client)
     try:
         final_df = credible_gen.generate(
             taxonomy_df=final_df,
             domain=domain,
             model=grounding_model,
-            max_workers=10,
+            max_workers=5,
         )
     except Exception as e:
         logging.warning("Research grounding step encountered error: %s. Setting citations to Could not find.", str(e))
@@ -1593,7 +1618,7 @@ class ModelEvaluationGenerator:
         batch_results = self._gemini_utils.generate_content_batch(
             requests,
             model=model_name,
-            max_workers=10
+            max_workers=5
         )
 
         rows = []
@@ -1699,7 +1724,7 @@ class AutoraterJudgeGenerator:
         batch_results = self._gemini_utils.generate_content_batch(
             requests,
             model=judge_model_name,
-            max_workers=10
+            max_workers=5
         )
 
         rows = []

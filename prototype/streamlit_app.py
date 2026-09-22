@@ -887,6 +887,12 @@ if 'data_mode' not in st.session_state:
 if 'highest_step' not in st.session_state:
     st.session_state.highest_step = 0
 
+if 'modality' not in st.session_state:
+    st.session_state.modality = ["text-to-image", "text-to-video", "text-to-text"]
+
+if 'saved_modality' not in st.session_state:
+    st.session_state.saved_modality = ["text-to-image", "text-to-video", "text-to-text"]
+
 if 'demo_data' not in st.session_state:
     try:
         st.session_state.demo_data = load_data("NodeSyn_Data_med_Full_Export.csv")
@@ -1007,6 +1013,8 @@ if st.session_state.step == "Home":
             st.session_state.data_mode = "static"
             st.session_state.highest_step = max(st.session_state.highest_step, 1)
             st.session_state.step = "Read Me"
+            st.session_state.modality = ["text-to-image", "text-to-video", "text-to-text"]
+            st.session_state.saved_modality = ["text-to-image", "text-to-video", "text-to-text"]
             st.rerun()
 
     with col_dynamic:
@@ -1239,9 +1247,9 @@ elif st.session_state.step == "Concept":
 <span style="font-size: 1.1rem;">🔄</span>
 <label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Modality</label>
 </div>""", unsafe_allow_html=True)
-            if 'modality' not in st.session_state:
-                st.session_state.modality = ["text-to-text", "text-to-video"]
-            st.multiselect("Modality", ["text-to-text", "text-to-image", "text-to-video"], default=st.session_state.modality, key="modality", label_visibility="collapsed")
+            if 'modality' not in st.session_state or not st.session_state.modality:
+                st.session_state.modality = ["text-to-image", "text-to-video", "text-to-text"]
+            st.multiselect("Modality", ["text-to-image", "text-to-video", "text-to-text"], default=st.session_state.modality, key="modality", label_visibility="collapsed")
 
             if is_dynamic:
                 active_api_keys = get_app_api_keys()
@@ -1285,7 +1293,7 @@ elif st.session_state.step == "Concept":
             if st.button("Generate Taxonomy (Simulated)", type="primary"):
                 st.session_state.saved_concept = st.session_state.target_concept
                 st.session_state.saved_countries = st.session_state.target_countries
-                st.session_state.saved_modality = st.session_state.get('modality', ["text-to-text", "text-to-video"])
+                st.session_state.saved_modality = st.session_state.get('modality', ["text-to-image", "text-to-video", "text-to-text"])
                 with st.spinner("Generating Taxonomy (Simulated)..."):
                     time.sleep(1)
                     if st.session_state.target_concept == "Medical Advice":
@@ -1317,7 +1325,7 @@ elif st.session_state.step == "Concept":
                     lang_code = st.session_state.get("language_code", "en")
                     dom_def = st.session_state.get("description", "")
                     u_case = st.session_state.get("use_case", "Advice seeking")
-                    modal_val = st.session_state.get("modality", ["text-to-text"])
+                    modal_val = st.session_state.get("modality", ["text-to-image", "text-to-video", "text-to-text"])
 
                     st.session_state.saved_concept = domain
                     st.session_state.saved_countries = st.session_state.target_countries
@@ -1652,7 +1660,13 @@ elif st.session_state.step == "Taxonomy":
                                  with st.spinner("Fetching research citation directly with search grounding..."):
                                      try:
                                          st.session_state.pop("last_node_citation_error", None)
-                                         grounding_model = "gemini-3.7-flash" if current_keys.get("gemini") else st.session_state.get("active_tax_model", "gemini-3.7-flash")
+                                         active_tax = st.session_state.get("active_tax_model", "")
+                                         if active_tax and get_model_provider(active_tax) == "gemini":
+                                             grounding_model = active_tax
+                                         elif current_keys.get("gemini"):
+                                             grounding_model = "gemini-3.5-flash"
+                                         else:
+                                             grounding_model = active_tax or "gemini-3.5-flash"
                                          res_ground = fetch_citation_for_node(
                                              domain=curr_domain,
                                              category=curr_l1,
@@ -1685,7 +1699,7 @@ elif st.session_state.step == "Taxonomy":
                              display_backend_error(
                                  st.session_state.last_node_citation_error,
                                  context="Research Citation Search Grounding",
-                                 model=st.session_state.get("active_tax_model", "gemini-3.7-flash"),
+                                 model=st.session_state.get("active_tax_model", "gemini-3.5-flash"),
                                  retry_key="retry_node_citation_btn",
                                  on_retry=lambda: st.session_state.pop("last_node_citation_error", None),
                              )
@@ -1704,7 +1718,13 @@ elif st.session_state.step == "Taxonomy":
                              st.markdown(f"<div style='margin-top: 4px; margin-bottom: 8px;'><a href='https://scholar.google.com/scholar?q={scholar_q}' target='_blank' style='font-size: 0.82em; color: #4f46e5; text-decoration: none;'>🔍 Search related research on Google Scholar ↗</a></div>", unsafe_allow_html=True)
                              if st.button("🔄 Fetch Citation via Google Search Grounding", key=f"btn_refetch_cite_{curr_l1}_{curr_l2}_{curr_l3}", use_container_width=False):
                                  current_keys = get_app_api_keys()
-                                 grounding_model = "gemini-3.7-flash" if current_keys.get("gemini") else st.session_state.get("active_tax_model", "gemini-3.7-flash")
+                                 active_tax = st.session_state.get("active_tax_model", "")
+                                 if active_tax and get_model_provider(active_tax) == "gemini":
+                                     grounding_model = active_tax
+                                 elif current_keys.get("gemini"):
+                                     grounding_model = "gemini-3.5-flash"
+                                 else:
+                                     grounding_model = active_tax or "gemini-3.5-flash"
                                  with st.spinner(f"Fetching research citation using {grounding_model} with Google Search..."):
                                      try:
                                          st.session_state.pop("last_node_citation_error", None)
