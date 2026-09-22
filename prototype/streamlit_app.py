@@ -273,14 +273,25 @@ def display_backend_error(
     retry_action = diag.get("retry_action", "Please wait a moment and try again.")
     is_retryable = diag.get("is_retryable", True)
 
-    model_tag = f"  •  Model: `{target_model}`" if target_model else ""
-    st.error(
-        f"⚠️ **{context}: {headline}**{model_tag}\n\n"
-        f"**Backend Error Gist:**  \n"
-        f"**{gist}**\n\n"
-        f"*{explanation}*"
-    )
-    st.warning(f"👉 **Action Needed:** {retry_action}")
+    category = diag.get("category", "")
+    target_name = target_model or "The selected model"
+
+    if category == "MODEL_OVERLOADED" or "overload" in headline.lower() or "overload" in gist.lower():
+        st.error(
+            f"⚡ **Model Overloaded — Fail Fast**\n\n"
+            f"**The selected model (`{target_name}`) is currently overloaded.**\n\n"
+            f"👉 **Please choose a different model from the model selector dropdown above to proceed.**"
+        )
+        st.warning(f"**Details:** {gist}\n\n*{explanation}*")
+    else:
+        model_tag = f"  •  Model: `{target_model}`" if target_model else ""
+        st.error(
+            f"⚠️ **{context}: {headline}**{model_tag}\n\n"
+            f"**Backend Error Gist:**  \n"
+            f"**{gist}**\n\n"
+            f"*{explanation}*"
+        )
+        st.warning(f"👉 **Action Needed:** {retry_action}")
 
     col_btn, col_exp = st.columns([1.5, 2.5])
     with col_btn:
@@ -1663,12 +1674,7 @@ elif st.session_state.step == "Taxonomy":
                                      try:
                                          st.session_state.pop("last_node_citation_error", None)
                                          active_tax = st.session_state.get("active_tax_model", "")
-                                         if active_tax and get_model_provider(active_tax) == "gemini":
-                                             grounding_model = active_tax
-                                         elif current_keys.get("gemini"):
-                                             grounding_model = "gemini-3.5-flash"
-                                         else:
-                                             grounding_model = active_tax or "gemini-3.5-flash"
+                                         grounding_model = active_tax
                                          res_ground = fetch_citation_for_node(
                                              domain=curr_domain,
                                              category=curr_l1,
@@ -1701,7 +1707,7 @@ elif st.session_state.step == "Taxonomy":
                              display_backend_error(
                                  st.session_state.last_node_citation_error,
                                  context="Research Citation Search Grounding",
-                                 model=st.session_state.get("active_tax_model", "gemini-3.5-flash"),
+                                 model=st.session_state.get("active_tax_model", ""),
                                  retry_key="retry_node_citation_btn",
                                  on_retry=lambda: st.session_state.pop("last_node_citation_error", None),
                              )
@@ -1721,12 +1727,7 @@ elif st.session_state.step == "Taxonomy":
                              if st.button("🔄 Fetch Citation via Google Search Grounding", key=f"btn_refetch_cite_{curr_l1}_{curr_l2}_{curr_l3}", use_container_width=False):
                                  current_keys = get_app_api_keys()
                                  active_tax = st.session_state.get("active_tax_model", "")
-                                 if active_tax and get_model_provider(active_tax) == "gemini":
-                                     grounding_model = active_tax
-                                 elif current_keys.get("gemini"):
-                                     grounding_model = "gemini-3.5-flash"
-                                 else:
-                                     grounding_model = active_tax or "gemini-3.5-flash"
+                                 grounding_model = active_tax
                                  with st.spinner(f"Fetching research citation using {grounding_model} with Google Search..."):
                                      try:
                                          st.session_state.pop("last_node_citation_error", None)

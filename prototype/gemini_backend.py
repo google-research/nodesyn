@@ -233,14 +233,16 @@ def parse_backend_error(
         "preempted out of decode queue" in lower_text
         or ("decode queue" in lower_text and "priority" in lower_text)
         or "preempted" in lower_text
+        or "decode_preempted" in lower_text
     ):
+        target_name = model or "The selected model"
         return {
-            "category": "QUEUE_PREEMPTION",
-            "headline": "Request Preempted from Queue",
-            "gist": "Preempted out of decode queue by a higher priority request.",
+            "category": "MODEL_OVERLOADED",
+            "headline": f"Model Overloaded (Queue Preempted) — {target_name}",
+            "gist": f"Model '{target_name}' is currently overloaded. Requests were preempted from the decode queue.",
             "explanation": "Google's Gemini backend server reached transient concurrency limits and evicted this request to prioritize higher-tier traffic.",
-            "retry_action": "Please retry your request now. If the issue recurs during peak traffic, consider switching to Gemini 3.5 Flash or Gemini 3.1 Flash-Lite.",
-            "is_retryable": True,
+            "retry_action": "The chosen model is overloaded. Please choose a different model from the model selector dropdown above to proceed.",
+            "is_retryable": False,
             "raw_message": clean_text,
         }
 
@@ -256,7 +258,7 @@ def parse_backend_error(
             "raw_message": clean_text,
         }
 
-    # Check 3: High Demand / Temporary Capacity (503 / spikes in demand)
+    # Check 3: High Demand / Temporary Capacity (503 / spikes in demand / overloaded)
     if (
         ("high demand" in lower_text and "temporary" in lower_text)
         or "experiencing high demand" in lower_text
@@ -264,14 +266,17 @@ def parse_backend_error(
         or "spikes in demand" in lower_text
         or ("503" in lower_text and ("unavailable" in lower_text or "demand" in lower_text or "overloaded" in lower_text))
         or "model is overloaded" in lower_text
+        or "503 unavailable" in lower_text
+        or "service unavailable" in lower_text
     ):
+        target_name = model or "The selected model"
         return {
-            "category": "HIGH_DEMAND",
-            "headline": "Model Experiencing High Demand",
-            "gist": "This model is currently experiencing high demand. Spikes in demand are usually temporary.",
-            "explanation": "The compute cluster serving this model is temporarily overloaded by high global request volume.",
-            "retry_action": "Please wait 10–30 seconds and click retry. If capacity remains tight, switching to an alternative model (e.g. Gemini 3.8 Flash or Gemini 3.1 Flash-Lite) is recommended.",
-            "is_retryable": True,
+            "category": "MODEL_OVERLOADED",
+            "headline": f"Model Overloaded (503 High Demand) — {target_name}",
+            "gist": f"Model '{target_name}' is currently experiencing high demand and is overloaded.",
+            "explanation": "The backend compute cluster serving this model is temporarily overloaded by high global request volume.",
+            "retry_action": "The chosen model is overloaded. Please choose a different model from the model selector dropdown above to proceed.",
+            "is_retryable": False,
             "raw_message": clean_text,
         }
 
@@ -293,7 +298,7 @@ def parse_backend_error(
             "raw_message": clean_text,
         }
 
-    # Check 4: Rate limit / Quota Exceeded (429 / RESOURCE_EXHAUSTED)
+    # Check 4b: Rate limit / Quota Exceeded (429 / RESOURCE_EXHAUSTED)
     if (
         "429" in lower_text
         or "resource_exhausted" in lower_text
@@ -301,13 +306,14 @@ def parse_backend_error(
         or "rate limit" in lower_text
         or "too many requests" in lower_text
     ):
+        target_name = model or "The selected model"
         return {
-            "category": "QUOTA_EXHAUSTED",
-            "headline": "API Rate Limit / Quota Exceeded (429)",
-            "gist": "Resource quota or rate limit has been exhausted on your API key.",
-            "explanation": "Your project reached its Queries-Per-Minute (QPM) limit or token allowance for the current billing cycle.",
-            "retry_action": "Please wait 30–60 seconds before retrying, or check your quota allocation in Google AI Studio or GCP Console.",
-            "is_retryable": True,
+            "category": "MODEL_OVERLOADED",
+            "headline": f"Model Rate Limit / Overloaded (429) — {target_name}",
+            "gist": f"Rate limit or quota has been reached for '{target_name}'. The model is overloaded.",
+            "explanation": "Your project reached its Queries-Per-Minute (QPM) limit or token allowance for this model.",
+            "retry_action": "The chosen model is overloaded. Please choose a different model from the dropdown above to continue.",
+            "is_retryable": False,
             "raw_message": clean_text,
         }
 
@@ -352,12 +358,13 @@ def parse_backend_error(
         or "remote disconnected" in lower_text
         or "econnrefused" in lower_text
     ):
+        target_name = model or "The selected model"
         return {
             "category": "NETWORK_TIMEOUT",
-            "headline": "Network Connection Timeout",
-            "gist": "Network request timed out while communicating with the model backend.",
+            "headline": f"Network Connection Timeout — {target_name}",
+            "gist": f"Network request timed out while communicating with model '{target_name}'.",
             "explanation": "The remote API server did not send a response within the allotted timeout window.",
-            "retry_action": "Please check your internet connection and click retry.",
+            "retry_action": "The model may be overloaded or unreachable. Please choose a different model or retry.",
             "is_retryable": True,
             "raw_message": clean_text,
         }
@@ -366,13 +373,14 @@ def parse_backend_error(
     one_liner = clean_text.split("\n")[0].strip()
     if len(one_liner) > 180:
         one_liner = one_liner[:180] + "..."
+    target_name = model or "The selected model"
     return {
-        "category": "BACKEND_ERROR",
-        "headline": f"Backend API Error{model_str}",
-        "gist": one_liner or "An error was returned by the model backend.",
+        "category": "MODEL_OVERLOADED",
+        "headline": f"Model Backend Error / Overloaded — {target_name}",
+        "gist": f"Model '{target_name}' returned a backend error and may be overloaded: {one_liner}",
         "explanation": "The model provider returned an unexpected error status.",
-        "retry_action": "Please retry your request. If the problem persists, try another model or check provider status.",
-        "is_retryable": True,
+        "retry_action": "The chosen model may be overloaded. Please choose a different model from the model selector dropdown above.",
+        "is_retryable": False,
         "raw_message": clean_text,
     }
 
@@ -532,48 +540,30 @@ class MultiModelUtils:
         tools: list[dict[str, Any] | types.Tool] | None = None,
         raise_for_status: bool = False,
     ) -> GenerateContentResult:
-        """Calls appropriate model provider with short retry logic."""
+        """Calls appropriate model provider with fail-fast execution (no retry delays)."""
         provider = self.get_model_provider(model)
-        retries = 3
-        last_error = None
-        for i in range(retries):
-            try:
-                if provider == "openai":
-                    text, resp = self._call_openai(request.prompt, model)
-                elif provider == "anthropic":
-                    text, resp = self._call_anthropic(request.prompt, model)
-                elif provider == "llama":
-                    text, resp = self._call_llama(request.prompt, model)
-                else:
-                    text, resp = self._call_gemini(request.prompt, model, tools)
+        try:
+            if provider == "openai":
+                text, resp = self._call_openai(request.prompt, model)
+            elif provider == "anthropic":
+                text, resp = self._call_anthropic(request.prompt, model)
+            elif provider == "llama":
+                text, resp = self._call_llama(request.prompt, model)
+            else:
+                text, resp = self._call_gemini(request.prompt, model, tools)
 
-                if text or (
-                    resp
-                    and getattr(resp, "candidates", None)
-                    and getattr(resp.candidates[0], "grounding_metadata", None)
-                ):
-                    return GenerateContentResult(request, text, resp)
-            except Exception as e:
-                last_error = e
-                logging.warning("Attempt %d/%d for [%s] failed with error: %s", i + 1, retries, model, str(e))
-                err_str = str(e).lower()
-                if any(fatal in err_str for fatal in [
-                    "404", "not found", "not_found", "api_key", "permission_denied",
-                    "no longer available", "deprecated", "only supports real-time bidirectional streaming"
-                ]):
-                    break
-                if i < retries - 1:
-                    sleep_time = min(5.0, 1.2 * (2 ** i) + random.uniform(0.2, 0.6))
-                    time.sleep(sleep_time)
-                else:
-                    break
-
-        if last_error is not None:
+            if text or (
+                resp
+                and getattr(resp, "candidates", None)
+                and getattr(resp.candidates[0], "grounding_metadata", None)
+            ):
+                return GenerateContentResult(request, text, resp)
+            return GenerateContentResult(request, text, resp)
+        except Exception as e:
+            logging.warning("Call to model [%s] failed: %s", model, str(e))
             if raise_for_status:
-                raise GeminiBackendError(last_error, model=model, provider=provider)
-            return GenerateContentResult(request, "", error=str(last_error))
-
-        return GenerateContentResult(request, "")
+                raise GeminiBackendError(e, model=model, provider=provider)
+            return GenerateContentResult(request, "", error=str(e))
 
     def generate_content_batch(
         self,
@@ -583,36 +573,40 @@ class MultiModelUtils:
         max_workers: int = 5,
         raise_for_status: bool = True,
     ) -> list[GenerateContentResult]:
-        """Calls model generate_content in parallel across workers."""
+        """Calls model generate_content in parallel across workers with fail-fast semantics."""
         if not requests:
             return []
         results: list[GenerateContentResult] = []
         with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             tasks_futures = {}
-            stagger = 0.2 if tools else 0.03
             for item in requests:
                 tasks_futures[executor.submit(self.generate_content, item, model, tools, False)] = item
-                time.sleep(stagger)
 
             for future in futures.as_completed(tasks_futures):
                 req = tasks_futures[future]
                 try:
                     result = future.result()
                     results.append(result)
+                    if raise_for_status and getattr(result, "error", None):
+                        # Fail fast: cancel all remaining pending tasks immediately
+                        for f in tasks_futures:
+                            f.cancel()
+                        logging.error("Fail-fast triggered in batch for model %s: %s", model, result.error)
+                        raise GeminiBackendError(result.error, model=model)
+                except GeminiBackendError:
+                    raise
                 except Exception as e:
                     logging.error("Batch request failed for model %s: %s", model, str(e))
+                    if raise_for_status:
+                        for f in tasks_futures:
+                            f.cancel()
+                        raise GeminiBackendError(e, model=model)
                     results.append(GenerateContentResult(req, "", error=str(e)))
 
         if raise_for_status:
             errors = [r.error for r in results if getattr(r, "error", None)]
             if errors:
-                has_fatal = any(
-                    any(fatal in str(err).lower() for fatal in ["404", "not found", "not_found", "api_key", "permission_denied"])
-                    for err in errors
-                )
-                if has_fatal or len(errors) == len(requests) or len(errors) >= max(1, len(requests) // 2):
-                    logging.error("Batch content generation failed with %d/%d errors for model %s: %s", len(errors), len(requests), model, errors[0])
-                    raise GeminiBackendError(errors[0], model=model)
+                raise GeminiBackendError(errors[0], model=model)
 
         return results
 
@@ -1250,10 +1244,10 @@ class CredibleSourceGenerator:
         category: str,
         topic: str,
         keywords: str | list[str],
-        model: str = "gemini-3.7-flash",
+        model: str = "gemini-3.8-flash",
     ) -> dict[str, Any]:
         """Fetches research paper citations for a single taxonomy node using Google Search grounding.
-        If the primary model fails or returns no citations, automatically tries with fallback models.
+        Fails fast if the user-selected model encounters an error (no fallback to other models).
         """
         prompt = self._generate_prompt(domain, category, topic, keywords)
         kw_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
@@ -1266,54 +1260,29 @@ class CredibleSourceGenerator:
                 "keywords": kw_str,
             },
         )
-        fallback_models = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3.8-flash"]
-        candidate_models = [model] + [m for m in fallback_models if m != model]
-        last_error = None
-        fallback_parsed = None
+        tools = [types.Tool(google_search=types.GoogleSearch())] if get_model_provider(model) == "gemini" else None
+        result = self._gemini_utils.generate_content(req, model=model, tools=tools, raise_for_status=True)
+        if getattr(result, "error", None):
+            raise GeminiBackendError(result.error, model=model)
 
-        for cand_model in candidate_models:
-            tools = [types.Tool(google_search=types.GoogleSearch())] if get_model_provider(cand_model) == "gemini" else None
-            try:
-                result = self._gemini_utils.generate_content(req, model=cand_model, tools=tools, raise_for_status=True)
-                if getattr(result, "error", None):
-                    raise GeminiBackendError(result.error, model=cand_model)
-                parsed = self._parse_result(
-                    result=result,
-                    domain=domain,
-                    category=category,
-                    topic=topic,
-                    keywords_str=kw_str,
-                )
-                if parsed.get("paper_titles") and parsed["paper_titles"] != ["Could not find"]:
-                    return parsed
-                fallback_parsed = parsed
-            except Exception as e:
-                last_error = e
-                logging.warning("Citation fetch with model %s failed: %s. Trying next fallback model...", cand_model, str(e))
-                continue
-
-        if fallback_parsed:
-            return fallback_parsed
-
-        if last_error:
-            raise GeminiBackendError(last_error, model=model)
-
-        return {
-            "paper_urls": [],
-            "paper_titles": ["Could not find"],
-            "url": [],
-            "paper_content": "Could not find",
-        }
+        parsed = self._parse_result(
+            result=result,
+            domain=domain,
+            category=category,
+            topic=topic,
+            keywords_str=kw_str,
+        )
+        return parsed
 
     def generate(
         self,
         taxonomy_df: pd.DataFrame,
         domain: str,
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.8-flash",
         max_workers: int = 5,
     ) -> pd.DataFrame:
         """Grounds all rows in taxonomy_df with credible research papers using Google Search.
-        If one model fails or is rate-limited, remaining rows are retried with fallback models.
+        Fails fast if the user-selected model encounters an error (no fallback to other models).
         """
         if taxonomy_df.empty:
             return taxonomy_df
@@ -1341,47 +1310,17 @@ class CredibleSourceGenerator:
             requests.append(req)
             row_indices.append(idx)
 
-        fallback_models = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3.8-flash"]
-        candidate_models = [model] + [m for m in fallback_models if m != model]
-        results_by_idx: dict[int, GenerateContentResult] = {}
-        pending_requests = list(requests)
+        tools = [types.Tool(google_search=types.GoogleSearch())] if get_model_provider(model) == "gemini" else None
+        batch_res = self._gemini_utils.generate_content_batch(
+            requests,
+            model=model,
+            tools=tools,
+            max_workers=max_workers,
+            raise_for_status=True,
+        )
 
-        for cand_model in candidate_models:
-            if not pending_requests:
-                break
-            tools = [types.Tool(google_search=types.GoogleSearch())] if get_model_provider(cand_model) == "gemini" else None
-            try:
-                batch_res = self._gemini_utils.generate_content_batch(
-                    pending_requests,
-                    model=cand_model,
-                    tools=tools,
-                    max_workers=max_workers,
-                    raise_for_status=False,
-                )
-                still_pending = []
-                for res in batch_res:
-                    r_idx = res.request.metadata.get("row_index")
-                    if res.generated_content and not getattr(res, "error", None):
-                        results_by_idx[r_idx] = res
-                    else:
-                        still_pending.append(res.request)
-                pending_requests = still_pending
-                if not pending_requests:
-                    break
-                logging.info(
-                    "Citation batch with %s resolved %d requests; retrying %d with next fallback model...",
-                    cand_model, len(results_by_idx), len(pending_requests)
-                )
-            except Exception as e:
-                logging.warning("Search grounding batch failed with model %s: %s. Trying fallback model...", cand_model, str(e))
-                continue
-
-        for req in requests:
-            r_idx = req.metadata.get("row_index")
-            if r_idx not in results_by_idx:
-                results_by_idx[r_idx] = GenerateContentResult(req, "")
-
-        results = [results_by_idx[req.metadata.get("row_index")] for req in requests]
+        results_by_idx = {res.request.metadata.get("row_index"): res for res in batch_res}
+        results = [results_by_idx.get(req.metadata.get("row_index"), GenerateContentResult(req, "")) for req in requests]
 
         parsed_by_idx = {}
         for res in results:
@@ -1428,7 +1367,7 @@ def generate_credible_sources(
     domain: str,
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.7-flash",
+    model: str = "gemini-3.8-flash",
     max_workers: int = 5,
 ) -> pd.DataFrame:
     """Grounds taxonomy branches with credible research papers using Google Search."""
@@ -1449,7 +1388,7 @@ def fetch_citation_for_node(
     keywords: str | list[str],
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.7-flash",
+    model: str = "gemini-3.8-flash",
 ) -> dict[str, Any]:
     """Fetches research paper citations for a single node via Google Search grounding."""
     client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
@@ -1542,28 +1481,15 @@ def generate_dynamic_taxonomy(
     if progress_callback:
         progress_callback(0.85, f"Discovering research paper citations for {len(final_df)} taxonomy branches...")
 
-    # Grounding: Respect selected model if it is a Gemini model, else fallback to available Gemini key or model
-    if model and ai_client.get_model_provider(model) == "gemini":
-        grounding_model = model
-    elif ai_client._api_keys.get("gemini"):
-        grounding_model = "gemini-3.5-flash"
-    else:
-        grounding_model = model
+    # Grounding: Respect selected model and fail fast without fallback or swallowing errors
+    grounding_model = model or "gemini-3.8-flash"
     credible_gen = CredibleSourceGenerator(ai_client)
-    try:
-        final_df = credible_gen.generate(
-            taxonomy_df=final_df,
-            domain=domain,
-            model=grounding_model,
-            max_workers=5,
-        )
-    except Exception as e:
-        logging.warning("Research grounding step encountered error: %s. Setting citations to Could not find.", str(e))
-        final_df["paper_urls"] = [[] for _ in range(len(final_df))]
-        final_df["paper_titles"] = [["Could not find"] for _ in range(len(final_df))]
-        final_df["url"] = [[] for _ in range(len(final_df))]
-        final_df["paper_content"] = ["Could not find" for _ in range(len(final_df))]
-        final_df.attrs["grounding_error"] = str(e)
+    final_df = credible_gen.generate(
+        taxonomy_df=final_df,
+        domain=domain,
+        model=grounding_model,
+        max_workers=5,
+    )
 
     # Format standard attributes
     final_df["user_case"] = use_case
