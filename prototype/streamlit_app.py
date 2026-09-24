@@ -3571,31 +3571,31 @@ elif st.session_state.step == "Analysis":
                     ))
 
                 fig_radar.update_layout(
-                polar=dict(
-                    radialaxis=dict(
-                        visible=True, range=[0, 100], ticksuffix="%",
-                        tickfont=dict(size=11, family="'Inter', sans-serif", color="#94a3b8"),
-                        gridcolor="#e2e8f0",
+                    polar=dict(
+                        radialaxis=dict(
+                            visible=True, range=[0, 100], ticksuffix="%",
+                            tickfont=dict(size=11, family="'Inter', sans-serif", color="#94a3b8"),
+                            gridcolor="#e2e8f0",
+                        ),
+                        angularaxis=dict(
+                            tickfont=dict(size=12, family="'Inter', sans-serif", color="#475569"),
+                            gridcolor="#e2e8f0",
+                        ),
+                        bgcolor="white",
                     ),
-                    angularaxis=dict(
-                        tickfont=dict(size=12, family="'Inter', sans-serif", color="#475569"),
-                        gridcolor="#e2e8f0",
+                    title=dict(text="Non-Disclosure (Failure) Rate by L1 Category per Model", font=dict(size=17, family="'Inter', sans-serif", color="#0f172a")),
+                    font=FONT_STYLE,
+                    height=600,
+                    margin=dict(l=80, r=80, t=100, b=60),
+                    paper_bgcolor="white",
+                    legend=dict(
+                        font=dict(size=13, family="'Inter', sans-serif"),
+                        bgcolor="rgba(255,255,255,0.9)",
+                        bordercolor="#e2e8f0", borderwidth=1,
                     ),
-                    bgcolor="white",
-                ),
-                title=dict(text="Non-Disclosure (Failure) Rate by L1 Category per Model", font=dict(size=17, family="'Inter', sans-serif", color="#0f172a")),
-                font=FONT_STYLE,
-                height=600,
-                margin=dict(l=80, r=80, t=100, b=60),
-                paper_bgcolor="white",
-                legend=dict(
-                    font=dict(size=13, family="'Inter', sans-serif"),
-                    bgcolor="rgba(255,255,255,0.9)",
-                    bordercolor="#e2e8f0", borderwidth=1,
-                ),
-                showlegend=True,
-            )
-            st.plotly_chart(fig_radar, use_container_width=True)
+                    showlegend=True,
+                )
+                st.plotly_chart(fig_radar, use_container_width=True)
         else:
             st.warning("Analysis data not found.")
 
