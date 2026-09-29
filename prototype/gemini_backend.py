@@ -196,13 +196,10 @@ def parse_backend_error(
         # Extract suggested replacement model if mentioned by backend
         rec_match = re.search(r'(?:use|switch to|recommend(?:ed)?)\s+(?:models?/)?(gemini-[a-zA-Z0-9\.\-_]+)', unescaped_str, re.IGNORECASE)
         ALLOWED_GEMINI_MODELS = {
-            "gemini-3.8-flash",
-            "gemini-3.7-flash",
-            "gemini-3.8-live",
             "gemini-3.5-flash",
             "gemini-3.1-flash-lite",
         }
-        suggested_model = "gemini-3.8-flash"
+        suggested_model = "gemini-3.5-flash"
         if rec_match:
             candidate = rec_match.group(1).lower()
             if candidate in ALLOWED_GEMINI_MODELS:
@@ -552,7 +549,7 @@ class MultiModelUtils:
     def generate_content(
         self,
         request: GenerateContentRequest,
-        model: str = "gemini-3.8-flash",
+        model: str = "gemini-3.5-flash",
         tools: list[dict[str, Any] | types.Tool] | None = None,
         raise_for_status: bool = False,
     ) -> GenerateContentResult:
@@ -584,7 +581,7 @@ class MultiModelUtils:
     def generate_content_batch(
         self,
         requests: list[GenerateContentRequest],
-        model: str = "gemini-3.8-flash",
+        model: str = "gemini-3.5-flash",
         tools: list[dict[str, Any]] | None = None,
         max_workers: int = 5,
         raise_for_status: bool = True,
@@ -737,7 +734,7 @@ class CategoryTopicsGenerator:
             return results[:3]
 
     def generate(
-        self, domain: str, country: str, language_code: str, domain_definition: str, model: str = "gemini-3.8-flash"
+        self, domain: str, country: str, language_code: str, domain_definition: str, model: str = "gemini-3.5-flash"
     ) -> pd.DataFrame:
         prompt = self._generate_prompt(domain, country, language_code, domain_definition)
         req = GenerateContentRequest(prompt=prompt)
@@ -849,7 +846,7 @@ class KeywordsGenerator:
         country: Any,
         language_code: str,
         domain_definition: str,
-        model: str = "gemini-3.8-flash",
+        model: str = "gemini-3.5-flash",
     ) -> pd.DataFrame:
         # Cap to exactly 10 requests for a single batch of 10 parallel workers
         df_subset = category_topics_df.head(10)
@@ -1046,7 +1043,7 @@ class PromptsGenerator:
         country: str,
         domain_definition: str,
         num_prompts: int = 2,
-        model: str = "gemini-3.8-flash",
+        model: str = "gemini-3.5-flash",
         modality: list[str] | str | None = None,
     ) -> pd.DataFrame:
         if isinstance(modality, list) and modality:
@@ -1273,7 +1270,7 @@ class CredibleSourceGenerator:
         category: str,
         topic: str,
         keywords: str | list[str],
-        model: str = "gemini-3.8-flash",
+        model: str = "gemini-3.5-flash",
     ) -> dict[str, Any]:
         """Fetches research paper citations for a single taxonomy node using Google Search grounding.
         Fails fast if the user-selected model encounters an error (no fallback to other models).
@@ -1307,7 +1304,7 @@ class CredibleSourceGenerator:
         self,
         taxonomy_df: pd.DataFrame,
         domain: str,
-        model: str = "gemini-3.8-flash",
+        model: str = "gemini-3.5-flash",
         max_workers: int = 5,
     ) -> pd.DataFrame:
         """Grounds all rows in taxonomy_df with credible research papers using Google Search.
@@ -1396,7 +1393,7 @@ def generate_credible_sources(
     domain: str,
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.8-flash",
+    model: str = "gemini-3.5-flash",
     max_workers: int = 5,
 ) -> pd.DataFrame:
     """Grounds taxonomy branches with credible research papers using Google Search."""
@@ -1417,7 +1414,7 @@ def fetch_citation_for_node(
     keywords: str | list[str],
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.8-flash",
+    model: str = "gemini-3.5-flash",
 ) -> dict[str, Any]:
     """Fetches research paper citations for a single node via Google Search grounding."""
     client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
@@ -1439,7 +1436,7 @@ def generate_dynamic_prompts(
     num_prompts: int = 2,
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.8-flash",
+    model: str = "gemini-3.5-flash",
     modality: list[str] | str | None = None,
     progress_callback: Any = None,
 ) -> pd.DataFrame:
@@ -1473,7 +1470,7 @@ def generate_dynamic_taxonomy(
     modality: list[str] | str = "text-to-text",
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.8-flash",
+    model: str = "gemini-3.5-flash",
     progress_callback: Any = None,
 ) -> pd.DataFrame:
     """Executes the full dynamic taxonomy generation pipeline with single-batch parallelization."""
@@ -1513,7 +1510,7 @@ def generate_dynamic_taxonomy(
         progress_callback(0.85, f"Discovering research paper citations for {len(final_df)} taxonomy branches...")
 
     # Grounding: Respect selected model and fail fast without fallback or swallowing errors
-    grounding_model = model or "gemini-3.8-flash"
+    grounding_model = model or "gemini-3.5-flash"
     credible_gen = CredibleSourceGenerator(ai_client)
     final_df = credible_gen.generate(
         taxonomy_df=final_df,
@@ -1550,8 +1547,8 @@ class ModelEvaluationGenerator:
     def evaluate(
         self,
         prompts_df: pd.DataFrame,
-        model_name: str = "gemini-3.8-flash",
-        display_model_name: str = "Gemini 3.8 Flash",
+        model_name: str = "gemini-3.5-flash",
+        display_model_name: str = "Gemini 3.5 Flash",
         max_prompts: int = 50,
     ) -> pd.DataFrame:
         df_subset = prompts_df.head(max_prompts)
@@ -1655,7 +1652,7 @@ class AutoraterJudgeGenerator:
         self,
         eval_df: pd.DataFrame,
         rubric_template: str,
-        judge_model_name: str = "gemini-3.8-flash",
+        judge_model_name: str = "gemini-3.5-flash",
         max_rows: int | None = None,
     ) -> pd.DataFrame:
         if max_rows and max_rows > 0:
@@ -1720,7 +1717,7 @@ class AutoraterJudgeGenerator:
 def generate_dynamic_autoratings(
     eval_df: pd.DataFrame,
     rubric_template: str,
-    judge_model_name: str = "gemini-3.8-flash",
+    judge_model_name: str = "gemini-3.5-flash",
     max_rows: int | None = None,
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,

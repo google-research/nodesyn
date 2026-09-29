@@ -51,9 +51,6 @@ PROVIDER_ICONS = {
 
 PROVIDER_MODELS = {
     "gemini": [
-        ("gemini-3.8-flash", "Gemini 3.8 Flash"),
-        ("gemini-3.7-flash", "Gemini 3.7 Flash"),
-        ("gemini-3.8-live", "Gemini 3.8 Live"),
         ("gemini-3.5-flash", "Gemini 3.5 Flash"),
         ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
     ],
@@ -136,10 +133,7 @@ def get_selectable_taxonomy_models() -> dict[str, str]:
     active = get_active_providers_list()
     options = {}
     if not active:
-        options["Gemini 3.8 Flash (Google - Recommended)"] = "gemini-3.8-flash"
-        options["Gemini 3.7 Flash (Google)"] = "gemini-3.7-flash"
-        options["Gemini 3.8 Live (Google - Interactive)"] = "gemini-3.8-live"
-        options["Gemini 3.5 Flash (Google)"] = "gemini-3.5-flash"
+        options["Gemini 3.5 Flash (Google - Recommended)"] = "gemini-3.5-flash"
         options["Gemini 3.1 Flash-Lite (Google - Fast)"] = "gemini-3.1-flash-lite"
         return options
     for p in active:
@@ -148,77 +142,34 @@ def get_selectable_taxonomy_models() -> dict[str, str]:
             options[f"{m_label} ({p_name})"] = m_id
     return options
 
-def get_evaluation_model_options() -> dict[str, list[tuple[str, str]]]:
+def get_evaluation_model_options() -> dict[str, tuple[str, str]]:
     keys = get_app_api_keys()
     active = [p for p in ["gemini", "openai", "anthropic", "llama"] if p in keys and keys[p]]
-    options = {}
-    
-    if len(active) > 1:
-        cross_provider = []
-        if "gemini" in active:
-            cross_provider.append(("gemini-3.8-flash", "Gemini 3.8 Flash"))
-        if "openai" in active:
-            cross_provider.append(("gpt-4o", "GPT-4o"))
-        if "anthropic" in active:
-            cross_provider.append(("claude-sonnet-4-6", "Claude Sonnet 4.6"))
-        if "llama" in active:
-            cross_provider.append(("llama-3.3-70b-versatile", "Llama 3.3 70B"))
-        options["🏆 Cross-Provider Benchmark (Compare All Configured Providers)"] = cross_provider
+    options: dict[str, tuple[str, str]] = {}
 
     if "gemini" in active:
-        options["Gemini 3.8 Flash (Recommended - Fast & Capable)"] = [("gemini-3.8-flash", "Gemini 3.8 Flash")]
-        options["Gemini 3.7 Flash (Google)"] = [("gemini-3.7-flash", "Gemini 3.7 Flash")]
-        options["Gemini 3.8 Live (Interactive & Reasoning)"] = [("gemini-3.8-live", "Gemini 3.8 Live")]
-        options["Gemini 3.5 Flash (Google)"] = [("gemini-3.5-flash", "Gemini 3.5 Flash")]
-        options["Gemini 3.1 Flash-Lite (High Throughput)"] = [("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite")]
-        options["Gemini 3.8 Flash vs 3.7 Flash"] = [
-            ("gemini-3.8-flash", "Gemini 3.8 Flash"),
-            ("gemini-3.7-flash", "Gemini 3.7 Flash"),
-        ]
-        options["All Gemini Models"] = [
-            ("gemini-3.8-flash", "Gemini 3.8 Flash"),
-            ("gemini-3.7-flash", "Gemini 3.7 Flash"),
-            ("gemini-3.8-live", "Gemini 3.8 Live"),
-            ("gemini-3.5-flash", "Gemini 3.5 Flash"),
-            ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
-        ]
+        options["Gemini 3.5 Flash (Google)"] = ("gemini-3.5-flash", "Gemini 3.5 Flash")
+        options["Gemini 3.1 Flash-Lite (Google)"] = ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite")
 
     if "openai" in active:
-        options["GPT-4o (OpenAI)"] = [("gpt-4o", "GPT-4o")]
-        options["GPT-4o Mini (OpenAI)"] = [("gpt-4o-mini", "GPT-4o Mini")]
-        options["o3-mini (OpenAI Fast Reasoning)"] = [("o3-mini", "o3-mini")]
-        options["o1 (OpenAI Frontier Reasoning)"] = [("o1", "o1")]
-        options["All OpenAI Models"] = [
-            ("gpt-4o", "GPT-4o"),
-            ("gpt-4o-mini", "GPT-4o Mini"),
-            ("o3-mini", "o3-mini"),
-        ]
+        options["GPT-4o (OpenAI)"] = ("gpt-4o", "GPT-4o")
+        options["GPT-4o Mini (OpenAI)"] = ("gpt-4o-mini", "GPT-4o Mini")
+        options["o3-mini (OpenAI)"] = ("o3-mini", "o3-mini")
+        options["o1 (OpenAI)"] = ("o1", "o1")
 
     if "anthropic" in active:
-        options["Claude Sonnet 4.6 (Anthropic)"] = [("claude-sonnet-4-6", "Claude Sonnet 4.6")]
-        options["Claude Sonnet 4.5 (Anthropic)"] = [("claude-sonnet-4-5", "Claude Sonnet 4.5")]
-        options["Claude Haiku 4.5 (Anthropic)"] = [("claude-haiku-4-5", "Claude Haiku 4.5")]
-        options["Claude Opus 4.6 (Anthropic)"] = [("claude-opus-4-6", "Claude Opus 4.6")]
-        options["All Anthropic Models"] = [
-            ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
-            ("claude-sonnet-4-5", "Claude Sonnet 4.5"),
-            ("claude-haiku-4-5", "Claude Haiku 4.5"),
-        ]
+        options["Claude Sonnet 4.6 (Anthropic)"] = ("claude-sonnet-4-6", "Claude Sonnet 4.6")
+        options["Claude Sonnet 4.5 (Anthropic)"] = ("claude-sonnet-4-5", "Claude Sonnet 4.5")
+        options["Claude Haiku 4.5 (Anthropic)"] = ("claude-haiku-4-5", "Claude Haiku 4.5")
+        options["Claude Opus 4.6 (Anthropic)"] = ("claude-opus-4-6", "Claude Opus 4.6")
 
     if "llama" in active:
-        options["Llama 3.3 70B (Meta)"] = [("llama-3.3-70b-versatile", "Llama 3.3 70B")]
-        options["Llama 3.1 8B (Meta)"] = [("llama-3.1-8b-instant", "Llama 3.1 8B")]
-        options["All Meta Llama Models"] = [
-            ("llama-3.3-70b-versatile", "Llama 3.3 70B"),
-            ("llama-3.1-8b-instant", "Llama 3.1 8B"),
-        ]
+        options["Llama 3.3 70B (Meta)"] = ("llama-3.3-70b-versatile", "Llama 3.3 70B")
+        options["Llama 3.1 8B (Meta)"] = ("llama-3.1-8b-instant", "Llama 3.1 8B")
 
     if not options:
-        options["Gemini 3.8 Flash (Recommended - Fast & Capable)"] = [("gemini-3.8-flash", "Gemini 3.8 Flash")]
-        options["Gemini 3.7 Flash (Google)"] = [("gemini-3.7-flash", "Gemini 3.7 Flash")]
-        options["Gemini 3.8 Live (Interactive)"] = [("gemini-3.8-live", "Gemini 3.8 Live")]
-        options["Gemini 3.5 Flash (Google)"] = [("gemini-3.5-flash", "Gemini 3.5 Flash")]
-        options["Gemini 3.1 Flash-Lite (High Throughput)"] = [("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite")]
+        options["Gemini 3.5 Flash (Google)"] = ("gemini-3.5-flash", "Gemini 3.5 Flash")
+        options["Gemini 3.1 Flash-Lite (Google)"] = ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite")
         
     return options
 
@@ -227,9 +178,6 @@ def get_autorater_judge_options() -> dict[str, str]:
     active = [p for p in ["gemini", "openai", "anthropic", "llama"] if p in keys and keys[p]]
     options = {}
     if "gemini" in active:
-        options["Gemini 3.8 Flash (Google) - Advanced Judge"] = "gemini-3.8-flash"
-        options["Gemini 3.7 Flash (Google) - Fast & Capable Judge"] = "gemini-3.7-flash"
-        options["Gemini 3.8 Live (Google) - Interactive Judge"] = "gemini-3.8-live"
         options["Gemini 3.5 Flash (Google) - Capable Judge"] = "gemini-3.5-flash"
         options["Gemini 3.1 Flash-Lite (Google) - High Speed Judge"] = "gemini-3.1-flash-lite"
     if "openai" in active:
@@ -245,9 +193,6 @@ def get_autorater_judge_options() -> dict[str, str]:
         options["Llama 3.3 70B (Meta Judge)"] = "llama-3.3-70b-versatile"
 
     if not options:
-        options["Gemini 3.8 Flash (Google) - Advanced Judge"] = "gemini-3.8-flash"
-        options["Gemini 3.7 Flash (Google) - Fast & Capable Judge"] = "gemini-3.7-flash"
-        options["Gemini 3.8 Live (Google) - Interactive Judge"] = "gemini-3.8-live"
         options["Gemini 3.5 Flash (Google) - Capable Judge"] = "gemini-3.5-flash"
         options["Gemini 3.1 Flash-Lite (Google) - High Speed Judge"] = "gemini-3.1-flash-lite"
     return options
@@ -299,7 +244,7 @@ def display_backend_error(
     col_btn, col_exp = st.columns([1.5, 2.5])
     with col_btn:
         if diag.get("category") == "MODEL_DEPRECATED":
-            rec_model = diag.get("recommended_model", "gemini-3.8-flash")
+            rec_model = diag.get("recommended_model", "gemini-3.5-flash")
             rec_display = rec_model.replace("gemini-", "Gemini ").replace("-", " ").title()
             if st.button(f"⚡ Auto-Switch to {rec_display} & Retry", key=f"btn_switch_{rec_model}", type="primary", use_container_width=True):
                 # Update any stored model selections to recommended model
@@ -2169,7 +2114,7 @@ elif st.session_state.step == "Data":
                     try:
                         st.session_state.pop("last_prompt_error", None)
                         current_keys = get_app_api_keys()
-                        prompt_model = st.session_state.get("active_tax_model", "gemini-3.8-flash")
+                        prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash")
                         new_prompts_df = generate_dynamic_prompts(
                             taxonomy_df=st.session_state.demo_data,
                             domain=concept_name,
@@ -2200,7 +2145,7 @@ elif st.session_state.step == "Data":
             display_backend_error(
                 st.session_state.last_prompt_error,
                 context="Synthetic Prompt Generation",
-                model=st.session_state.get("active_tax_model", "gemini-3.8-flash"),
+                model=st.session_state.get("active_tax_model", "gemini-3.5-flash"),
                 retry_key="retry_prompt_gen_btn",
                 on_retry=lambda: st.session_state.pop("last_prompt_error", None),
             )
@@ -2300,14 +2245,20 @@ elif st.session_state.step == "Evaluation":
 
                 col1, col2 = st.columns([1, 1], gap="large")
                 with col1:
+                    st.markdown("**Target Model(s) to Evaluate**")
+                    st.caption("Select any combination of AI models to evaluate against the synthesized benchmark queries.")
                     DYNAMIC_MODEL_OPTIONS = get_evaluation_model_options()
-                    selected_model_choice = st.selectbox(
-                        "Target Model(s) to Evaluate",
-                        options=list(DYNAMIC_MODEL_OPTIONS.keys()),
-                        index=0,
-                        help="Select which AI model(s) to evaluate against the synthesized benchmark queries. Options dynamically reflect your configured API keys."
-                    )
-                    target_model_tuples = DYNAMIC_MODEL_OPTIONS[selected_model_choice]
+                    target_model_tuples = []
+                    chk_cols = st.columns(2)
+                    for idx, (model_label, model_tuple) in enumerate(DYNAMIC_MODEL_OPTIONS.items()):
+                        with chk_cols[idx % 2]:
+                            is_checked = st.checkbox(
+                                model_label,
+                                value=(idx == 0),
+                                key=f"eval_target_chk_{model_tuple[0]}"
+                            )
+                            if is_checked:
+                                target_model_tuples.append(model_tuple)
 
                 with col2:
                     st.markdown(f"""
@@ -2322,62 +2273,65 @@ elif st.session_state.step == "Evaluation":
                 col_gen, _ = st.columns([1.5, 3])
                 with col_gen:
                     if st.button("🚀 Generate Model Responses (50 Queries)", type="primary", use_container_width=True):
-                        current_keys = get_app_api_keys()
-                        progress_bar = st.progress(0.0)
-                        status_text = st.empty()
+                        if not target_model_tuples:
+                            st.warning("⚠️ Please select at least one target model to evaluate.")
+                        else:
+                            current_keys = get_app_api_keys()
+                            progress_bar = st.progress(0.0)
+                            status_text = st.empty()
 
-                        def handle_progress(pct, msg):
-                            progress_bar.progress(pct)
-                            status_text.markdown(f"**Status:** {msg}")
+                            def handle_progress(pct, msg):
+                                progress_bar.progress(pct)
+                                status_text.markdown(f"**Status:** {msg}")
 
-                        try:
-                            st.session_state.pop("last_eval_error", None)
-                            eval_batch_df = prompts_eval_df
-                            # If fewer than 50 queries are available in source_df, auto-synthesize additional queries on-the-fly to reach 50
-                            if len(eval_batch_df) < 50 and not source_df.empty:
-                                status_text.markdown("**Status:** Synthesizing additional benchmark queries to reach 50 prompts...")
-                                needed = 50 - len(eval_batch_df)
-                                prompt_model = st.session_state.get("active_tax_model", "gemini-3.8-flash")
-                                num_per_row = max(2, math.ceil(needed / max(len(source_df), 1)))
-                                more_prompts_df = generate_dynamic_prompts(
-                                    taxonomy_df=source_df,
-                                    domain=st.session_state.get('saved_concept', 'Medical Advice'),
-                                    country=st.session_state.get('saved_countries', ['Global']),
-                                    domain_definition=st.session_state.get('saved_definition', ''),
-                                    num_prompts=num_per_row,
+                            try:
+                                st.session_state.pop("last_eval_error", None)
+                                eval_batch_df = prompts_eval_df
+                                # If fewer than 50 queries are available in source_df, auto-synthesize additional queries on-the-fly to reach 50
+                                if len(eval_batch_df) < 50 and not source_df.empty:
+                                    status_text.markdown("**Status:** Synthesizing additional benchmark queries to reach 50 prompts...")
+                                    needed = 50 - len(eval_batch_df)
+                                    prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash")
+                                    num_per_row = max(2, math.ceil(needed / max(len(source_df), 1)))
+                                    more_prompts_df = generate_dynamic_prompts(
+                                        taxonomy_df=source_df,
+                                        domain=st.session_state.get('saved_concept', 'Medical Advice'),
+                                        country=st.session_state.get('saved_countries', ['Global']),
+                                        domain_definition=st.session_state.get('saved_definition', ''),
+                                        num_prompts=num_per_row,
+                                        api_key=current_keys.get("gemini"),
+                                        api_keys=current_keys,
+                                        model=prompt_model,
+                                    )
+                                    if not more_prompts_df.empty:
+                                        st.session_state.demo_data = pd.concat([st.session_state.demo_data, more_prompts_df], ignore_index=True)
+                                        new_rows = []
+                                        for _, r in more_prompts_df.iterrows():
+                                            p_str = str(r.get("prompts", "")).strip()
+                                            if p_str:
+                                                new_rows.append({
+                                                    "prompts": p_str,
+                                                    "level1": r.get("level1", "General"),
+                                                    "level2": r.get("level2", "General"),
+                                                    "level3": r.get("level3", "General"),
+                                                    "country": r.get("extracted_Country", "Global"),
+                                                })
+                                        eval_batch_df = pd.concat([eval_batch_df, pd.DataFrame(new_rows)], ignore_index=True).drop_duplicates(subset=['prompts']).head(50)
+
+                                eval_results_df = generate_dynamic_evaluations(
+                                    prompts_df=eval_batch_df,
+                                    target_models=target_model_tuples,
+                                    max_prompts=50,
                                     api_key=current_keys.get("gemini"),
                                     api_keys=current_keys,
-                                    model=prompt_model,
+                                    progress_callback=handle_progress,
                                 )
-                                if not more_prompts_df.empty:
-                                    st.session_state.demo_data = pd.concat([st.session_state.demo_data, more_prompts_df], ignore_index=True)
-                                    new_rows = []
-                                    for _, r in more_prompts_df.iterrows():
-                                        p_str = str(r.get("prompts", "")).strip()
-                                        if p_str:
-                                            new_rows.append({
-                                                "prompts": p_str,
-                                                "level1": r.get("level1", "General"),
-                                                "level2": r.get("level2", "General"),
-                                                "level3": r.get("level3", "General"),
-                                                "country": r.get("extracted_Country", "Global"),
-                                            })
-                                    eval_batch_df = pd.concat([eval_batch_df, pd.DataFrame(new_rows)], ignore_index=True).drop_duplicates(subset=['prompts']).head(50)
-
-                            eval_results_df = generate_dynamic_evaluations(
-                                prompts_df=eval_batch_df,
-                                target_models=target_model_tuples,
-                                max_prompts=50,
-                                api_key=current_keys.get("gemini"),
-                                api_keys=current_keys,
-                                progress_callback=handle_progress,
-                            )
-                            if not eval_results_df.empty:
-                                st.session_state.eval_data = eval_results_df
-                                st.session_state.eval_generated = True
-                                st.rerun()
-                        except Exception as e:
-                            st.session_state.last_eval_error = e
+                                if not eval_results_df.empty:
+                                    st.session_state.eval_data = eval_results_df
+                                    st.session_state.eval_generated = True
+                                    st.rerun()
+                            except Exception as e:
+                                st.session_state.last_eval_error = e
 
                 if st.session_state.get("last_eval_error"):
                     display_backend_error(
@@ -2471,51 +2425,54 @@ elif st.session_state.step == "Evaluation":
                         st.rerun()
                 with col_eval_more:
                     if st.button("✨ Evaluate +25 More", use_container_width=True):
-                        with st.spinner("Synthesizing & evaluating +25 additional queries..."):
-                            try:
-                                current_keys = get_app_api_keys()
-                                already_evaluated = set(eval_results['query'].unique())
-                                unevaluated = [p for p in prompts_to_eval if p['prompts'] not in already_evaluated]
+                        if not target_model_tuples:
+                            st.warning("⚠️ Please select at least one target model to evaluate.")
+                        else:
+                            with st.spinner("Synthesizing & evaluating +25 additional queries..."):
+                                try:
+                                    current_keys = get_app_api_keys()
+                                    already_evaluated = set(eval_results['query'].unique())
+                                    unevaluated = [p for p in prompts_to_eval if p['prompts'] not in already_evaluated]
 
-                                if len(unevaluated) < 25:
-                                    prompt_model = st.session_state.get("active_tax_model", "gemini-3.8-flash")
-                                    more_prompts_df = generate_dynamic_prompts(
-                                        taxonomy_df=st.session_state.demo_data,
-                                        domain=st.session_state.get('saved_concept', 'Medical Advice'),
-                                        country=st.session_state.get('saved_countries', ['Global']),
-                                        domain_definition=st.session_state.get('saved_definition', ''),
-                                        num_prompts=3,
-                                        api_key=current_keys.get("gemini"),
-                                        api_keys=current_keys,
-                                        model=prompt_model,
-                                    )
-                                    if not more_prompts_df.empty:
-                                        st.session_state.demo_data = pd.concat([st.session_state.demo_data, more_prompts_df], ignore_index=True)
-                                        for _, r in more_prompts_df.iterrows():
-                                            p_str = str(r.get("prompts", "")).strip()
-                                            if p_str and p_str not in already_evaluated:
-                                                unevaluated.append({
-                                                    "prompts": p_str,
-                                                    "level1": r.get("level1", "General"),
-                                                    "level2": r.get("level2", "General"),
-                                                    "level3": r.get("level3", "General"),
-                                                    "country": r.get("extracted_Country", "Global"),
-                                                })
+                                    if len(unevaluated) < 25:
+                                        prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash")
+                                        more_prompts_df = generate_dynamic_prompts(
+                                            taxonomy_df=st.session_state.demo_data,
+                                            domain=st.session_state.get('saved_concept', 'Medical Advice'),
+                                            country=st.session_state.get('saved_countries', ['Global']),
+                                            domain_definition=st.session_state.get('saved_definition', ''),
+                                            num_prompts=3,
+                                            api_key=current_keys.get("gemini"),
+                                            api_keys=current_keys,
+                                            model=prompt_model,
+                                        )
+                                        if not more_prompts_df.empty:
+                                            st.session_state.demo_data = pd.concat([st.session_state.demo_data, more_prompts_df], ignore_index=True)
+                                            for _, r in more_prompts_df.iterrows():
+                                                p_str = str(r.get("prompts", "")).strip()
+                                                if p_str and p_str not in already_evaluated:
+                                                    unevaluated.append({
+                                                        "prompts": p_str,
+                                                        "level1": r.get("level1", "General"),
+                                                        "level2": r.get("level2", "General"),
+                                                        "level3": r.get("level3", "General"),
+                                                        "country": r.get("extracted_Country", "Global"),
+                                                    })
 
-                                batch_to_eval = pd.DataFrame(unevaluated).drop_duplicates(subset=['prompts']).head(25)
-                                if not batch_to_eval.empty:
-                                    new_eval_df = generate_dynamic_evaluations(
-                                        prompts_df=batch_to_eval,
-                                        target_models=target_model_tuples,
-                                        max_prompts=25,
-                                        api_key=current_keys.get("gemini"),
-                                        api_keys=current_keys,
-                                    )
-                                    if not new_eval_df.empty:
-                                        st.session_state.eval_data = pd.concat([st.session_state.eval_data, new_eval_df], ignore_index=True)
-                                        st.toast("✅ Added +25 model evaluation responses!")
-                            except Exception as err:
-                                st.session_state.last_eval_more_error = err
+                                    batch_to_eval = pd.DataFrame(unevaluated).drop_duplicates(subset=['prompts']).head(25)
+                                    if not batch_to_eval.empty:
+                                        new_eval_df = generate_dynamic_evaluations(
+                                            prompts_df=batch_to_eval,
+                                            target_models=target_model_tuples,
+                                            max_prompts=25,
+                                            api_key=current_keys.get("gemini"),
+                                            api_keys=current_keys,
+                                        )
+                                        if not new_eval_df.empty:
+                                            st.session_state.eval_data = pd.concat([st.session_state.eval_data, new_eval_df], ignore_index=True)
+                                            st.toast("✅ Added +25 model evaluation responses!")
+                                except Exception as err:
+                                    st.session_state.last_eval_more_error = err
                 with col_reset:
                     if st.button("🔄 Re-run Evaluation", use_container_width=True):
                         st.session_state.eval_data = pd.DataFrame()
