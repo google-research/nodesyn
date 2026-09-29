@@ -98,7 +98,7 @@ echo "NodeSyn supports dynamic generation & evaluation across multiple AI models
 echo "Which model providers are you interested in using?"
 echo "  [1] Google Gemini    (Gemini 3.8 Flash, Gemini 3.7 Flash, Gemini 3.8 Live, Gemini 3.5 Flash, Gemini 3.1 Flash-Lite)"
 echo "  [2] OpenAI GPT       (GPT-4o, GPT-4o-mini, o3-mini, o1)"
-echo "  [3] Anthropic Claude (Claude 3.7 Sonnet, Claude 3.5 Sonnet, Claude 3.5 Haiku)"
+echo "  [3] Anthropic Claude (Claude Sonnet 4.6, Claude Sonnet 4.5, Claude Haiku 4.5, Claude Opus 4.6)"
 echo "  [4] Meta Llama       (Llama 3.3 70B, Llama 3.1 8B via Groq/OpenRouter)"
 echo "  [5] All Providers    (Enable all 4 providers)"
 echo ""

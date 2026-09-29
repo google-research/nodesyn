@@ -64,9 +64,10 @@ PROVIDER_MODELS = {
         ("o1", "o1"),
     ],
     "anthropic": [
-        ("claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet"),
-        ("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet"),
-        ("claude-3-5-haiku-20241022", "Claude 3.5 Haiku"),
+        ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+        ("claude-sonnet-4-5", "Claude Sonnet 4.5"),
+        ("claude-haiku-4-5", "Claude Haiku 4.5"),
+        ("claude-opus-4-6", "Claude Opus 4.6"),
     ],
     "llama": [
         ("llama-3.3-70b-versatile", "Llama 3.3 70B"),
@@ -159,7 +160,7 @@ def get_evaluation_model_options() -> dict[str, list[tuple[str, str]]]:
         if "openai" in active:
             cross_provider.append(("gpt-4o", "GPT-4o"))
         if "anthropic" in active:
-            cross_provider.append(("claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet"))
+            cross_provider.append(("claude-sonnet-4-6", "Claude Sonnet 4.6"))
         if "llama" in active:
             cross_provider.append(("llama-3.3-70b-versatile", "Llama 3.3 70B"))
         options["🏆 Cross-Provider Benchmark (Compare All Configured Providers)"] = cross_provider
@@ -194,13 +195,14 @@ def get_evaluation_model_options() -> dict[str, list[tuple[str, str]]]:
         ]
 
     if "anthropic" in active:
-        options["Claude 3.7 Sonnet (Anthropic)"] = [("claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet")]
-        options["Claude 3.5 Sonnet (Anthropic)"] = [("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet")]
-        options["Claude 3.5 Haiku (Anthropic)"] = [("claude-3-5-haiku-20241022", "Claude 3.5 Haiku")]
+        options["Claude Sonnet 4.6 (Anthropic)"] = [("claude-sonnet-4-6", "Claude Sonnet 4.6")]
+        options["Claude Sonnet 4.5 (Anthropic)"] = [("claude-sonnet-4-5", "Claude Sonnet 4.5")]
+        options["Claude Haiku 4.5 (Anthropic)"] = [("claude-haiku-4-5", "Claude Haiku 4.5")]
+        options["Claude Opus 4.6 (Anthropic)"] = [("claude-opus-4-6", "Claude Opus 4.6")]
         options["All Anthropic Models"] = [
-            ("claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet"),
-            ("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet"),
-            ("claude-3-5-haiku-20241022", "Claude 3.5 Haiku"),
+            ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+            ("claude-sonnet-4-5", "Claude Sonnet 4.5"),
+            ("claude-haiku-4-5", "Claude Haiku 4.5"),
         ]
 
     if "llama" in active:
@@ -235,9 +237,10 @@ def get_autorater_judge_options() -> dict[str, str]:
         options["GPT-4o Mini (OpenAI)"] = "gpt-4o-mini"
         options["o3-mini (OpenAI Fast Reasoning)"] = "o3-mini"
     if "anthropic" in active:
-        options["Claude 3.7 Sonnet (Anthropic Judge)"] = "claude-3-7-sonnet-20250219"
-        options["Claude 3.5 Sonnet (Anthropic)"] = "claude-3-5-sonnet-20241022"
-        options["Claude 3.5 Haiku (Anthropic)"] = "claude-3-5-haiku-20241022"
+        options["Claude Sonnet 4.6 (Anthropic Judge)"] = "claude-sonnet-4-6"
+        options["Claude Sonnet 4.5 (Anthropic)"] = "claude-sonnet-4-5"
+        options["Claude Haiku 4.5 (Anthropic)"] = "claude-haiku-4-5"
+        options["Claude Opus 4.6 (Anthropic)"] = "claude-opus-4-6"
     if "llama" in active:
         options["Llama 3.3 70B (Meta Judge)"] = "llama-3.3-70b-versatile"
 
@@ -3287,6 +3290,10 @@ elif st.session_state.step == "Analysis":
         "o3-mini": {"line": "#047857", "fill": "rgba(4,120,87,0.08)"},
         "o1": {"line": "#065f46", "fill": "rgba(6,95,70,0.08)"},
         # Claude
+        "Claude Sonnet 4.6": {"line": "#d97706", "fill": "rgba(217,119,6,0.08)"},
+        "Claude Sonnet 4.5": {"line": "#f59e0b", "fill": "rgba(245,158,11,0.08)"},
+        "Claude Haiku 4.5": {"line": "#b45309", "fill": "rgba(180,83,9,0.08)"},
+        "Claude Opus 4.6": {"line": "#92400e", "fill": "rgba(146,64,14,0.08)"},
         "Claude 3.7 Sonnet": {"line": "#d97706", "fill": "rgba(217,119,6,0.08)"},
         "Claude 3.5 Sonnet": {"line": "#f59e0b", "fill": "rgba(245,158,11,0.08)"},
         "Claude 3.5 Haiku": {"line": "#b45309", "fill": "rgba(180,83,9,0.08)"},
@@ -3312,7 +3319,7 @@ elif st.session_state.step == "Analysis":
         if "gpt" in m_low or "o3" in m_low or "o1" in m_low or "openai" in m_low:
             return MODEL_COLORS["GPT-4o"]
         if "claude" in m_low or "anthropic" in m_low:
-            return MODEL_COLORS["Claude 3.7 Sonnet"]
+            return MODEL_COLORS["Claude Sonnet 4.6"]
         if "llama" in m_low or "meta" in m_low:
             return MODEL_COLORS["Llama 3.3 70B"]
         return DEFAULT_PALETTE[idx % len(DEFAULT_PALETTE)]

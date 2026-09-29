@@ -492,13 +492,28 @@ class MultiModelUtils:
         if not self._anthropic_client:
             self._anthropic_client = anthropic.Anthropic(api_key=a_key)
 
+        claude_model_map = {
+            "claude-3-7-sonnet-20250219": "claude-sonnet-4-6",
+            "claude-3-7-sonnet-latest": "claude-sonnet-4-6",
+            "claude-3-5-sonnet-20241022": "claude-sonnet-4-5",
+            "claude-3-5-sonnet-latest": "claude-sonnet-4-5",
+            "claude-3-5-haiku-20241022": "claude-haiku-4-5",
+            "claude-3-5-haiku-latest": "claude-haiku-4-5",
+            "claude-opus-4-20250514": "claude-opus-4-6",
+            "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+        }
+        resolved_model = claude_model_map.get(model, model)
+
         resp = self._anthropic_client.messages.create(
-            model=model,
+            model=resolved_model,
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
         )
-        text = resp.content[0].text if resp.content else ""
+        text = ""
+        if resp and getattr(resp, "content", None):
+            for block in resp.content:
+                if getattr(block, "text", None):
+                    text += block.text
         return text, resp
 
     def _call_llama(self, prompt: str, model: str) -> tuple[str, Any]:
