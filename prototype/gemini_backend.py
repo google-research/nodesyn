@@ -936,8 +936,15 @@ class KeywordsGenerator:
             cat_lower = meta["category"].lower().strip()
             dom_lower = domain.lower().strip()
 
-            cleaned_kw = []
+            # Flatten any comma-separated items first
+            flat_kw = []
             for k in keywords_list:
+                for part in str(k).split(","):
+                    if part.strip():
+                        flat_kw.append(part.strip())
+
+            cleaned_kw = []
+            for k in flat_kw:
                 k_str = str(k).strip().strip('"\'')
                 if not k_str:
                     continue
@@ -969,8 +976,10 @@ class KeywordsGenerator:
                 else:
                     keywords_list = ["Manifestations", "Vulnerabilities", "Mechanisms"]
 
+            level3_str = ", ".join(keywords_list)
+
             if not prompts_list:
-                kw_str = keywords_list[0] if keywords_list else meta["topic"]
+                kw_str = level3_str if level3_str else meta["topic"]
                 prompts_list = [
                     f"Can you explain the safety considerations and best practices regarding {meta['topic']} ({kw_str}) in {domain} ({assigned_country})?",
                     f"A user from {user_group} in {assigned_country} is inquiring about {meta['topic']}. How should an AI appropriately respond while adhering to {domain} guidelines?",
@@ -983,14 +992,14 @@ class KeywordsGenerator:
                 "Domain": domain,
                 "level1": meta["category"],
                 "level2": meta["topic"],
-                "level3": keywords_list,
+                "level3": level3_str,
                 "user_group": user_group,
                 "extracted_Country": [assigned_country],
                 "cleaned_Country": assigned_country,
                 "extracted_occupations": occupations if isinstance(occupations, list) else [str(occupations)],
                 "extracted_Demographics": demographics if isinstance(demographics, list) else [str(demographics)],
                 "category_topic_rationale": meta["category_topic_rationale"],
-                "keywords": ", ".join(keywords_list),
+                "keywords": level3_str,
                 "prompts": prompts_list,
             })
             
@@ -1114,7 +1123,7 @@ class PromptsGenerator:
                 new_row["prompts"] = p_text
                 new_row["model_modality"] = modality_list[len(exploded_rows) % len(modality_list)]
                 if isinstance(new_row.get("level3"), list) and new_row["level3"]:
-                    new_row["level3"] = new_row["level3"][len(exploded_rows) % len(new_row["level3"])]
+                    new_row["level3"] = ", ".join(str(k).strip() for k in new_row["level3"] if str(k).strip())
                 exploded_rows.append(new_row)
 
         return pd.DataFrame(exploded_rows)

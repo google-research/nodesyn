@@ -644,11 +644,20 @@ def create_sankey_visualization(df_final):
             except: return [x]
         return x if isinstance(x, list) else [x]
 
-    for col in ['level3', 'extracted_Country', 'user_group']:
+    def format_l3_str(x):
+        vals = safe_eval_list(x)
+        if isinstance(vals, list):
+            return ", ".join(str(v).strip() for v in vals if str(v).strip())
+        return str(vals).strip()
+
+    if 'level3' in df_temp.columns:
+        df_temp['level3'] = df_temp['level3'].apply(format_l3_str)
+
+    for col in ['extracted_Country', 'user_group']:
         if col in df_temp.columns:
             df_temp[col] = df_temp[col].apply(safe_eval_list)
 
-    df_exploded = df_temp.explode('level3').explode('extracted_Country').explode('user_group').reset_index(drop=True)
+    df_exploded = df_temp.explode('extracted_Country').explode('user_group').reset_index(drop=True)
     df_exploded.rename(columns={'extracted_Country': 'cleaned_Country'}, inplace=True)
     
     for col in ['cleaned_Country', 'level1', 'level2', 'level3', 'user_group', 'Domain']:
@@ -1427,11 +1436,17 @@ elif st.session_state.step == "Taxonomy":
                     except:
                         return [x]
                 return x if isinstance(x, list) else [x]
+
+            def format_l3_str(x):
+                vals = safe_eval_list(x)
+                if isinstance(vals, list):
+                    return ", ".join(str(v).strip() for v in vals if str(v).strip())
+                return str(vals).strip()
             
             # Prepare data
             tree_df = df[['level1', 'level2', 'level3']].copy()
-            tree_df['level3'] = tree_df['level3'].apply(safe_eval_list)
-            tree_df = tree_df.explode('level3').dropna().drop_duplicates().sort_values(['level1', 'level2', 'level3'])
+            tree_df['level3'] = tree_df['level3'].apply(format_l3_str)
+            tree_df = tree_df.dropna().drop_duplicates().sort_values(['level1', 'level2', 'level3'])
             
             if ('selected_l3' not in st.session_state) or (st.session_state.get('selected_l3') not in tree_df['level3'].values):
                 if not tree_df.empty:
@@ -1488,11 +1503,9 @@ elif st.session_state.step == "Taxonomy":
                      st.info("ℹ️ Metadata is available for L3 Leaf nodes. Click any L3 node in the tree to view its details.")
                  else:
                      # Find data for the selected L3
-                     # We search in the exploded demo_data to find matching row
                      df_search = df.copy()
-                     df_search['level3_list'] = df_search['level3'].apply(safe_eval_list)
-                     df_exploded = df_search.explode('level3_list')
-                     match = df_exploded[df_exploded['level3_list'] == st.session_state.selected_l3]
+                     df_search['level3_str'] = df_search['level3'].apply(format_l3_str)
+                     match = df_search[df_search['level3_str'] == st.session_state.selected_l3]
                      if 'selected_l1' in st.session_state and 'selected_l2' in st.session_state:
                          sub_match = match[(match['level1'] == st.session_state.selected_l1) & (match['level2'] == st.session_state.selected_l2)]
                          if not sub_match.empty:
@@ -1798,9 +1811,9 @@ elif st.session_state.step == "Data":
         if df_work['prompts'].apply(lambda x: isinstance(x, list)).any():
             df_work = df_work.explode('prompts')
 
-        # Explode/flatten level3 if list
+        # Format level3 as comma-separated keywords if list
         if df_work['level3'].apply(lambda x: isinstance(x, list)).any():
-            df_work['level3'] = df_work['level3'].apply(lambda x: x[0] if isinstance(x, list) and x else str(x))
+            df_work['level3'] = df_work['level3'].apply(lambda x: ", ".join(str(i).strip() for i in x if str(i).strip()) if isinstance(x, list) and x else str(x))
 
         # Flatten extracted_Country if list
         if df_work['extracted_Country'].apply(lambda x: isinstance(x, list)).any():
