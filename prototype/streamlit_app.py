@@ -1423,6 +1423,11 @@ elif st.session_state.step == "Taxonomy":
     
     tab_graph, tab_structure = st.tabs(["Taxonomy Flow", "Taxonomy Structure"])
     
+    if is_dynamic and user_modalities and not st.session_state.demo_data.empty:
+        st.session_state.demo_data['model_modality'] = [
+            user_modalities[i % len(user_modalities)] for i in range(len(st.session_state.demo_data))
+        ]
+
     with tab_graph:
         if not st.session_state.demo_data.empty:
             df = st.session_state.demo_data.copy()
@@ -1866,11 +1871,9 @@ elif st.session_state.step == "Data":
         df_work['prompts'] = df_work['prompts'].astype(str)
         df_work = df_work.dropna(subset=['prompts']).drop_duplicates(subset=['Domain', 'level1', 'level2', 'level3', 'prompts']).copy()
 
-        # Filter by modality selected on Concept page
+        # Split and use all modalities selected on Concept page equally across rows
         if user_modalities:
-            df_modal_match = df_work[df_work['model_modality'].isin(user_modalities)]
-            if not df_modal_match.empty:
-                df_work = df_modal_match.copy()
+            df_work['model_modality'] = [user_modalities[i % len(user_modalities)] for i in range(len(df_work))]
         # Multi-signal complexity score
         def compute_complexity(text):
             text = str(text)
@@ -2176,6 +2179,7 @@ elif st.session_state.step == "Data":
                             api_key=current_keys.get("gemini"),
                             api_keys=current_keys,
                             model=prompt_model,
+                            modality=user_modalities,
                         )
                         if not new_prompts_df.empty:
                             st.session_state.demo_data = pd.concat([st.session_state.demo_data, new_prompts_df], ignore_index=True)
@@ -2277,6 +2281,10 @@ elif st.session_state.step == "Evaluation":
                         })
             
             all_unique_prompts = pd.DataFrame(prompts_to_eval).drop_duplicates(subset=['prompts']) if prompts_to_eval else pd.DataFrame()
+            if not all_unique_prompts.empty and user_modalities:
+                all_unique_prompts['model_modality'] = [
+                    user_modalities[i % len(user_modalities)] for i in range(len(all_unique_prompts))
+                ]
             prompts_eval_df = all_unique_prompts.head(50)
             n_queries_available = len(all_unique_prompts)
             n_display_queue = min(n_queries_available, 50) if n_queries_available > 0 else 50

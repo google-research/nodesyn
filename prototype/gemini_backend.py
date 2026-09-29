@@ -1047,7 +1047,19 @@ class PromptsGenerator:
         domain_definition: str,
         num_prompts: int = 2,
         model: str = "gemini-3.8-flash",
+        modality: list[str] | str | None = None,
     ) -> pd.DataFrame:
+        if isinstance(modality, list) and modality:
+            modality_list = [str(m).strip() for m in modality if str(m).strip()]
+        elif isinstance(modality, str) and modality.strip():
+            modality_list = [m.strip() for m in modality.split(",") if m.strip()]
+        elif "model_modality" in taxonomy_df.columns:
+            modality_list = [str(m).strip() for m in taxonomy_df["model_modality"].dropna().unique().tolist() if str(m).strip()]
+        else:
+            modality_list = ["text-to-image", "text-to-video", "text-to-text"]
+        if not modality_list:
+            modality_list = ["text-to-text"]
+
         requests = []
         df_subset = taxonomy_df.head(10)
         for idx, row in df_subset.iterrows():
@@ -1106,6 +1118,7 @@ class PromptsGenerator:
             for p_text in prompt_list:
                 new_row = dict(row_dict)
                 new_row["prompts"] = p_text
+                new_row["model_modality"] = modality_list[len(exploded_rows) % len(modality_list)]
                 if isinstance(new_row.get("level3"), list) and new_row["level3"]:
                     new_row["level3"] = new_row["level3"][len(exploded_rows) % len(new_row["level3"])]
                 exploded_rows.append(new_row)
@@ -1427,6 +1440,7 @@ def generate_dynamic_prompts(
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
     model: str = "gemini-3.8-flash",
+    modality: list[str] | str | None = None,
     progress_callback: Any = None,
 ) -> pd.DataFrame:
     """Synthesizes dynamic prompts for a given taxonomy DataFrame."""
@@ -1443,6 +1457,7 @@ def generate_dynamic_prompts(
         domain_definition=domain_definition,
         num_prompts=num_prompts,
         model=model,
+        modality=modality,
     )
     if progress_callback:
         progress_callback(1.0, f"Generated {len(res_df)} synthetic evaluation prompts!")
@@ -1507,9 +1522,17 @@ def generate_dynamic_taxonomy(
         max_workers=5,
     )
 
-    # Format standard attributes
+    # Format standard attributes and distribute selected modalities equally across rows
     final_df["user_case"] = use_case
-    final_df["model_modality"] = modality[0] if isinstance(modality, list) and modality else str(modality)
+    if isinstance(modality, list) and modality:
+        modality_list = [str(m).strip() for m in modality if str(m).strip()]
+    elif isinstance(modality, str) and modality.strip():
+        modality_list = [m.strip() for m in modality.split(",") if m.strip()]
+    else:
+        modality_list = ["text-to-text"]
+    if not modality_list:
+        modality_list = ["text-to-text"]
+    final_df["model_modality"] = [modality_list[i % len(modality_list)] for i in range(len(final_df))]
     final_df["index"] = list(range(len(final_df)))
 
     if progress_callback:
@@ -1552,7 +1575,8 @@ class ModelEvaluationGenerator:
                     "level1": str(row.get("level1", "General")),
                     "level2": str(row.get("level2", "General")),
                     "level3": str(row.get("level3", "General")),
-                    "country": str(row.get("extracted_Country", row.get("cleaned_Country", "Global"))),
+                    "country": str(row.get("extracted_Country", row.get("cleaned_Country", row.get("country", "Global")))),
+                    "model_modality": str(row.get("model_modality", "text-to-text")),
                 }
             )
             requests.append(req)
@@ -1579,6 +1603,7 @@ class ModelEvaluationGenerator:
                 "level2": meta.get("level2", ""),
                 "level3": meta.get("level3", ""),
                 "country": meta.get("country", "Global"),
+                "model_modality": meta.get("model_modality", "text-to-text"),
             })
 
         return pd.DataFrame(rows)
