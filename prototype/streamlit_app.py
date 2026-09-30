@@ -127,7 +127,7 @@ def is_running_locally() -> bool:
 
 def get_active_providers_list() -> list[str]:
     keys = get_app_api_keys()
-    return [p for p in ["gemini", "openai", "anthropic", "llama"] if p in keys and keys[p]]
+    return [p for p in ["gemini", "openai", "anthropic"] if p in keys and keys[p]]
 
 def get_selectable_taxonomy_models() -> dict[str, str]:
     active = get_active_providers_list()
@@ -144,7 +144,7 @@ def get_selectable_taxonomy_models() -> dict[str, str]:
 
 def get_evaluation_model_options() -> dict[str, tuple[str, str]]:
     keys = get_app_api_keys()
-    active = [p for p in ["gemini", "openai", "anthropic", "llama"] if p in keys and keys[p]]
+    active = [p for p in ["gemini", "openai", "anthropic"] if p in keys and keys[p]]
     options: dict[str, tuple[str, str]] = {}
 
     if "gemini" in active:
@@ -163,10 +163,6 @@ def get_evaluation_model_options() -> dict[str, tuple[str, str]]:
         options["Claude Haiku 4.5 (Anthropic)"] = ("claude-haiku-4-5", "Claude Haiku 4.5")
         options["Claude Opus 4.6 (Anthropic)"] = ("claude-opus-4-6", "Claude Opus 4.6")
 
-    if "llama" in active:
-        options["Llama 3.3 70B (Meta)"] = ("llama-3.3-70b-versatile", "Llama 3.3 70B")
-        options["Llama 3.1 8B (Meta)"] = ("llama-3.1-8b-instant", "Llama 3.1 8B")
-
     if not options:
         options["Gemini 3.5 Flash (Google)"] = ("gemini-3.5-flash", "Gemini 3.5 Flash")
         options["Gemini 3.1 Flash-Lite (Google)"] = ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite")
@@ -175,7 +171,7 @@ def get_evaluation_model_options() -> dict[str, tuple[str, str]]:
 
 def get_autorater_judge_options() -> dict[str, str]:
     keys = get_app_api_keys()
-    active = [p for p in ["gemini", "openai", "anthropic", "llama"] if p in keys and keys[p]]
+    active = [p for p in ["gemini", "openai", "anthropic"] if p in keys and keys[p]]
     options = {}
     if "gemini" in active:
         options["Gemini 3.5 Flash (Google) - Capable Judge"] = "gemini-3.5-flash"
@@ -189,8 +185,6 @@ def get_autorater_judge_options() -> dict[str, str]:
         options["Claude Sonnet 4.5 (Anthropic)"] = "claude-sonnet-4-5"
         options["Claude Haiku 4.5 (Anthropic)"] = "claude-haiku-4-5"
         options["Claude Opus 4.6 (Anthropic)"] = "claude-opus-4-6"
-    if "llama" in active:
-        options["Llama 3.3 70B (Meta Judge)"] = "llama-3.3-70b-versatile"
 
     if not options:
         options["Gemini 3.5 Flash (Google) - Capable Judge"] = "gemini-3.5-flash"
@@ -1039,7 +1033,8 @@ elif st.session_state.step == "Read Me":
     st.title("📖 User Guide: NodeSyn")
 
     st.markdown(
-        "Welcome to the NodeSyn prototype. NodeSyn is a systematic, social-science-informed, and evidence-grounded methodology for generating socially relevant synthetic queries for AI model evaluation. It enables a holistic assessment of model behavior across sensitive domains and complex policies."
+        "Welcome to the NodeSyn prototype. NodeSyn is a systematic, social-science-informed, and evidence-grounded methodology for generating socially relevant synthetic queries for AI model evaluation. It enables a holistic assessment of model behavior across sensitive domains and complex policies.\n\n"
+        "🔗 **GitHub Repository:** [https://github.com/google-research/nodesyn](https://github.com/google-research/nodesyn)"
     )
 
     st.markdown(
@@ -1052,8 +1047,6 @@ elif st.session_state.step == "Read Me":
     """,
         unsafe_allow_html=True,
     )
-
-
 
     # The Challenge
     st.markdown(
@@ -1070,7 +1063,8 @@ elif st.session_state.step == "Read Me":
     st.markdown(
         """
     1. **Concept Setup:** Define the overarching theme (e.g., "Cultural Bias") and operational constraints (countries, languages, modality).
-    2. **Taxonomy Generation:** The system leverages a fine-tuned taxonomy generator (TaG) to intelligently extrapolate a structured vocabulary (L1, L2, L3). This grounds abstract concepts in concrete, granular scenarios.
+    2. **Taxonomy Generation:** The system leverages a structured taxonomy generation pipeline to intelligently extrapolate a hierarchical vocabulary (L1, L2, L3), grounding abstract concepts in concrete, granular scenarios.
+       > ⚠️ **Disclosure:** Research citations in taxonomy generation are retrieved using Google Search and may contain invalid research paper links.
     3. **Data Synthesis:** We generate synthetic examples, anchoring them in intersections of sensitive attributes and complex societal contexts.
     4. **Evaluation:** You define a rubric targeting nuanced harms. We evaluate the model's performance on the synthetic dataset, specifically assessing safety, accuracy, and bias alignment.
     5. **Analysis Dashboard:** Root cause analysis made visual. Trace where model performance degrades across taxonomic and demographic intersections to facilitate targeted interventions.
@@ -1083,7 +1077,7 @@ elif st.session_state.step == "Read Me":
     <div style="background-color: #fdf2f8; padding: 1.5rem; border-radius: 0.5rem; border: 1px solid #fbcfe8; margin-bottom: 1rem;">
         <h3 style="margin-top: 0; color: #1f2937; font-size: 1.25rem; font-weight: 600;">🎯 Core Contributions</h3>
         <ul style="color: #4b5563; line-height: 1.6; padding-left: 1.5rem; margin-bottom: 0;">
-            <li><strong>Sociotechnical Framework:</strong> Leverages an expert-curated TaG (Taxonomy Generator) to ground synthetic data in real-world harms.</li>
+            <li><strong>Sociotechnical Framework:</strong> Leverages a structured taxonomy generation pipeline to ground synthetic data in real-world harms.</li>
             <li><strong>Empowered Scaling:</strong> Specifically designed to enable resource-constrained entities (researchers, civil society) to scale high-stakes model evaluation.</li>
             <li><strong>Empirical Efficacy:</strong> Demonstrates that granular taxonomic depth significantly outperforms standard datasets, eliciting higher failure rates across mainstream AI models.</li>
             <li><strong>Interpretable Diagnostics:</strong> Allows evaluators to trace exact failure intersections for mitigation.</li>
@@ -1131,11 +1125,13 @@ elif st.session_state.step == "Concept":
     
     # Presets for domain definitions
     CONCEPT_DEFINITIONS = {
-        "Hate Speech": "Content that disparages, promotes violence or discrimination, or incites hatred against an individual or group on the basis of their characteristics that is associated with systemic discrimination or marginalization. Any kind of communication in speech, writing or behaviour, that attacks or uses pejorative or discriminatory language with reference to a person or a group on the basis of who they are, in other words, based on their religion, ethnicity, nationality, race, colour, descent, gender or other identity factor.",
+        "Custom Domain": "Comprehensive policy and domain guidelines defining sensitive categories and topics.",
         "Medical Advice": "Patient specific health assessment focusing on nuanced guidance and symptom interpretation.",
+        "Example: Medical Advice": "Patient specific health assessment focusing on nuanced guidance and symptom interpretation.",
         "Cultural Representation": "Depiction, portrayal, or symbolization of cultures, traditions, identities, and lived experiences across diverse demographic communities.",
+        "Example: Cultural Representation": "Depiction, portrayal, or symbolization of cultures, traditions, identities, and lived experiences across diverse demographic communities.",
         "Public Health and Safety": "Policies, healthcare access, sanitation standards, disease outbreak response, and public health community measures.",
-        "Custom Domain": "Comprehensive policy and domain guidelines defining sensitive categories and topics."
+        "Example: Public Health and Safety": "Policies, healthcare access, sanitation standards, disease outbreak response, and public health community measures.",
     }
 
     with st.container():
@@ -1149,9 +1145,14 @@ elif st.session_state.step == "Concept":
 """, unsafe_allow_html=True)
             
             if is_dynamic:
-                preset_options = ["Hate Speech", "Medical Advice", "Cultural Representation", "Public Health and Safety", "Custom Domain"]
-                default_dyn_concept = st.session_state.get('target_concept', 'Hate Speech')
-                idx = preset_options.index(default_dyn_concept) if default_dyn_concept in preset_options else 0
+                preset_options = [
+                    "Custom Domain",
+                    "Example: Medical Advice",
+                    "Example: Cultural Representation",
+                    "Example: Public Health and Safety",
+                ]
+                saved_selector = st.session_state.get("concept_selector", "Custom Domain")
+                idx = preset_options.index(saved_selector) if saved_selector in preset_options else 0
                 selected_concept = st.selectbox(
                     "Target Concept",
                     preset_options,
@@ -1159,11 +1160,17 @@ elif st.session_state.step == "Concept":
                     key="concept_selector",
                     label_visibility="collapsed"
                 )
-                if selected_concept == "Custom Domain":
-                    custom_domain_val = st.text_input("Enter Custom Domain Name", value=st.session_state.get("custom_domain", "AI Safety Policy"), key="custom_domain")
-                    st.session_state.target_concept = custom_domain_val
+                is_custom_domain = (selected_concept == "Custom Domain")
+                custom_domain_val = st.text_input(
+                    "Enter Custom Domain Name",
+                    value=st.session_state.get("custom_domain", "AI Safety Policy"),
+                    key="custom_domain",
+                    disabled=not is_custom_domain,
+                )
+                if is_custom_domain:
+                    st.session_state.target_concept = custom_domain_val.strip() if custom_domain_val.strip() else "Custom Domain"
                 else:
-                    st.session_state.target_concept = selected_concept
+                    st.session_state.target_concept = selected_concept.replace("Example: ", "").strip()
             else:
                 st.text_input("Target Concept", value="Medical Advice", key="target_concept_display", disabled=True, label_visibility="collapsed")
                 st.session_state.target_concept = "Medical Advice"
@@ -1173,7 +1180,7 @@ elif st.session_state.step == "Concept":
 <label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Target Countries / Regions</label>
 </div>""", unsafe_allow_html=True)
             countries_list = [
-                "ALL", "Global",
+                "Global",
                 "Afghanistan", "Albania", "Algeria", "Argentina", "Armenia", "Australia", "Austria", "Azerbaijan",
                 "Bahamas", "Bahrain", "Bangladesh", "Barbados", "Belgium", "Belize", "Bhutan", "Bolivia",
                 "Bosnia and Herzegovina", "Botswana", "Brazil", "Bulgaria", "Cambodia", "Cameroon", "Canada",
@@ -1193,7 +1200,10 @@ elif st.session_state.step == "Concept":
                 "Yemen", "Zambia", "Zimbabwe"
             ]
             if 'target_countries' not in st.session_state:
-                st.session_state.target_countries = ["ALL"] if is_dynamic else ["Global"]
+                st.session_state.target_countries = ["Global"]
+            else:
+                cleaned_countries = [c for c in st.session_state.target_countries if c in countries_list]
+                st.session_state.target_countries = cleaned_countries if cleaned_countries else ["Global"]
             st.multiselect("Target Countries", countries_list, key="target_countries", label_visibility="collapsed")
 
             col_lang, col_uc = st.columns(2)
@@ -1215,12 +1225,12 @@ elif st.session_state.step == "Concept":
 <span style="font-size: 1.1rem;">📝</span>
 <label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Domain Definition & Scope</label>
 </div>""", unsafe_allow_html=True)
-            active_concept_key = st.session_state.get("concept_selector", st.session_state.target_concept)
-            default_def = CONCEPT_DEFINITIONS.get(active_concept_key, CONCEPT_DEFINITIONS.get(st.session_state.target_concept, CONCEPT_DEFINITIONS["Medical Advice"]))
+            active_concept_key = st.session_state.get("concept_selector", st.session_state.target_concept) if is_dynamic else st.session_state.target_concept
+            default_def = CONCEPT_DEFINITIONS.get(active_concept_key, CONCEPT_DEFINITIONS.get(st.session_state.target_concept, CONCEPT_DEFINITIONS["Custom Domain"]))
             
-            if 'description' not in st.session_state or st.session_state.get('_last_concept') != st.session_state.target_concept:
+            if 'description' not in st.session_state or st.session_state.get('_last_concept') != active_concept_key:
                 st.session_state.description = default_def
-                st.session_state._last_concept = st.session_state.target_concept
+                st.session_state._last_concept = active_concept_key
                 
             st.text_area("Domain Definition & Scope", key="description", height=130, label_visibility="collapsed")
 
@@ -1380,7 +1390,6 @@ elif st.session_state.step == "Taxonomy":
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">🌍 {regions}</span>
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">📌 {concept_name}</span>
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">🎨 {modality_str}</span>
-{'<span style="background: rgba(255,255,255,0.3); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 700;">⚡ Dynamic (Gemini API)</span>' if is_dynamic else ''}
 </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1574,6 +1583,9 @@ elif st.session_state.step == "Taxonomy":
                          
                          # Research Citations
                          st.markdown("📖 **RESEARCH CITATIONS**")
+                         st.caption(
+                             "⚠️ **Disclosure:** Research citations use Google Search and may contain invalid research paper links."
+                         )
                          
                          import re
                          import ast
@@ -1675,6 +1687,15 @@ elif st.session_state.step == "Taxonomy":
                                                       df_up.at[r_i, 'paper_titles'] = [clean_citation_title(t) for t in res_ground.get('paper_titles', [])]
                                                       df_up.at[r_i, 'url'] = res_ground['url']
                                                       df_up.at[r_i, 'paper_content'] = res_ground['paper_content']
+                                                      if 'user_group' in df_up.columns:
+                                                          curr_ug = str(df_up.at[r_i, 'user_group'] or '').strip()
+                                                          if not curr_ug or curr_ug.lower() in ('general public', 'general population', 'all users', 'everyone', 'n/a', 'none'):
+                                                              occ = str(res_ground.get('extracted_occ') or '').strip()
+                                                              demo = str(res_ground.get('extracted_demo') or '').strip()
+                                                              if occ and occ.lower() not in ('n/a', 'none', 'general public', 'unspecified'):
+                                                                  df_up.at[r_i, 'user_group'] = occ
+                                                              elif demo and demo.lower() not in ('n/a', 'none', 'general public', 'unspecified'):
+                                                                  df_up.at[r_i, 'user_group'] = demo
                                              st.session_state.demo_data = df_up
                                              st.rerun()
                                      except Exception as c_err:
@@ -1731,6 +1752,15 @@ elif st.session_state.step == "Taxonomy":
                                                      df_up.at[r_i, 'paper_titles'] = [clean_citation_title(t) for t in res_ground.get('paper_titles', [])]
                                                      df_up.at[r_i, 'url'] = res_ground['url']
                                                      df_up.at[r_i, 'paper_content'] = res_ground['paper_content']
+                                                     if 'user_group' in df_up.columns:
+                                                         curr_ug = str(df_up.at[r_i, 'user_group'] or '').strip()
+                                                         if not curr_ug or curr_ug.lower() in ('general public', 'general population', 'all users', 'everyone', 'n/a', 'none'):
+                                                             occ = str(res_ground.get('extracted_occ') or '').strip()
+                                                             demo = str(res_ground.get('extracted_demo') or '').strip()
+                                                             if occ and occ.lower() not in ('n/a', 'none', 'general public', 'unspecified'):
+                                                                 df_up.at[r_i, 'user_group'] = occ
+                                                             elif demo and demo.lower() not in ('n/a', 'none', 'general public', 'unspecified'):
+                                                                 df_up.at[r_i, 'user_group'] = demo
                                              st.session_state.demo_data = df_up
                                              st.rerun()
                                      except Exception as c_err:

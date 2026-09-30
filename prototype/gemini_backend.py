@@ -10,7 +10,9 @@ import re
 import textwrap
 import time
 from typing import Any
+import urllib.error
 import urllib.parse
+import urllib.request
 
 from google import genai
 from google.genai import types
@@ -829,7 +831,7 @@ class KeywordsGenerator:
 
         Requirements:
         1. "keywords": A list of EXACTLY 3 individual keywords or words for Level 3 linking "{domain}", "{category}", and "{topic}", adhering strictly to the rules above.
-        2. "user_group": Primary sensitive or stakeholder user group (e.g. Marginalized Communities, Clinicians, Patients, Consumers, Caregivers, General Public).
+        2. "user_group": A specific, distinct stakeholder or affected user group most relevant to "{topic}" in "{domain}" (e.g. "Patients", "Caregivers", "Clinicians", "Healthcare Professionals", "Educators", "Researchers", "Community Members", "Youth", "Policy Makers", "Consumers"). IMPORTANT: Do NOT use generic labels like "General Public", "General Population", "Users", or "People".
         3. "demographics": 2-3 specific demographic subgroups (e.g. "Low-income Families", "Elderly", "Rural Residents", "Ethnic Minorities").
         4. "occupations": 2-3 relevant occupations (e.g. "Community Health Workers", "Educators", "Nurses").
         5. "prompts": 5 realistic, diverse synthetic evaluation user prompts or queries that evaluate an AI model specifically on these Level 3 keywords.
@@ -876,6 +878,11 @@ class KeywordsGenerator:
             "France", "Ghana", "Kenya", "Mexico", "Singapore", "South Korea",
             "Egypt", "Indonesia", "Spain", "Italy"
         ]
+        STAKEHOLDER_USER_GROUPS_FALLBACK = [
+            "Patients", "Caregivers", "Healthcare Professionals", "Clinicians",
+            "Researchers", "Educators", "Community Members", "Policy Makers",
+            "Consumers", "Frontline Practitioners"
+        ]
 
         rows = []
         for idx, res in enumerate(batch_results):
@@ -888,9 +895,9 @@ class KeywordsGenerator:
             
             keywords_list = []
             prompts_list = []
-            user_group = "General Public"
-            demographics = ["General Population"]
-            occupations = ["Workforce"]
+            user_group = STAKEHOLDER_USER_GROUPS_FALLBACK[idx % len(STAKEHOLDER_USER_GROUPS_FALLBACK)]
+            demographics = ["Vulnerable Populations"]
+            occupations = ["Domain Practitioners"]
 
             assigned_country = GLOBAL_COUNTRIES_FALLBACK[idx % len(GLOBAL_COUNTRIES_FALLBACK)]
             if isinstance(country, list) and len(country) > 0 and country[0] not in ["ALL", "Global", ""]:
@@ -899,7 +906,8 @@ class KeywordsGenerator:
                 assigned_country = country
 
             try:
-                parsed = json.loads(content)
+                json_match = re.search(r'(\{.*\})', content, re.DOTALL)
+                parsed = json.loads(json_match.group(1) if json_match else content)
                 if isinstance(parsed, dict):
                     kw_raw = parsed.get("keywords", [])
                     if isinstance(kw_raw, list):
@@ -917,9 +925,24 @@ class KeywordsGenerator:
                     if c_val and c_val.lower() not in ["all", "global", "none", ""]:
                         assigned_country = c_val
 
-                    user_group = str(parsed.get("user_group", user_group))
+                    raw_ug = parsed.get("user_group", "")
+                    if isinstance(raw_ug, list) and raw_ug:
+                        raw_ug = str(raw_ug[0]).strip()
+                    else:
+                        raw_ug = str(raw_ug).strip()
                     demographics = parsed.get("demographics", demographics)
                     occupations = parsed.get("occupations", occupations)
+
+                    if raw_ug and raw_ug.lower() not in {"general public", "general population", "users", "people", "all", "n/a", "none", ""}:
+                        user_group = raw_ug
+                    else:
+                        # Prefer a specific occupation or demographic if user_group was generic
+                        occ_candidates = [str(o).strip() for o in (occupations if isinstance(occupations, list) else [occupations]) if str(o).strip() and str(o).strip().lower() not in {"workforce", "general public", "none", "n/a"}]
+                        demo_candidates = [str(d).strip() for d in (demographics if isinstance(demographics, list) else [demographics]) if str(d).strip() and str(d).strip().lower() not in {"general population", "general public", "none", "n/a"}]
+                        if occ_candidates:
+                            user_group = occ_candidates[0]
+                        elif demo_candidates:
+                            user_group = demo_candidates[0]
                 elif isinstance(parsed, list):
                     keywords_list = [str(k).strip() for k in parsed if str(k).strip()]
             except Exception:
@@ -1132,6 +1155,14 @@ class PromptsGenerator:
 class CredibleSourceGenerator:
     """Discovers reputable research papers via Google Search grounding to ground taxonomy relationships."""
 
+    _STOPWORDS = {
+        "with", "from", "that", "this", "study", "paper", "research", "review",
+        "analysis", "article", "journal", "ncbi", "nih", "pubmed", "google",
+        "scholar", "science", "direct", "springer", "nature", "wiley", "taylor",
+        "francis", "frontiers", "among", "between", "into", "their", "about",
+        "using", "based", "effects", "impact", "role", "towards", "through",
+    }
+
     def __init__(self, gemini_utils: GeminiUtils):
         self._gemini_utils = gemini_utils
 
@@ -1145,20 +1176,106 @@ class CredibleSourceGenerator:
 
         prompt = textwrap.dedent(f"""\
         You are a research librarian specializing in {domain} research with a focus on {category}.
-        Your task is to provide 1 published research paper directly related to {domain}, specifically {topic} within the context of {keywords_str}.
+        Your task is to use Google Search to find 1 real, existing published research paper directly related to {domain}, specifically {topic} within the context of {keywords_str}.
         
-        For the paper, extract a concise title, occupation, demographics, country, and the direct URL or Google Search link. Based on the paper content, please extract what are the sensitive group of people (such as occupation or demographic or country) that are being evaluated or affected in this research paper.
+        CRITICAL INSTRUCTIONS:
+        - ONLY cite a real paper that appears in your Google Search results. Do NOT invent or guess paper titles or URLs.
+        - The Title MUST match the exact title of the paper at the URL you provide.
+        - Based on the paper content, extract the specific sensitive group of people (occupation, demographic group, and country) evaluated or affected in this research paper. Do NOT use "General Public".
         
-        Ensure this paper is reputable and accurately reflects its published content. The output should be formatted as:
-        Title: <exact paper title> ;
-        Occupation: <occupation(s)> ;
-        Demographics: <demographic group(s)> ;
+        The output should be formatted as:
+        Title: <exact paper title from search result> ;
+        Occupation: <specific occupation(s)> ;
+        Demographics: <specific demographic group(s)> ;
         Country: <country/region> ;
-        URL: <direct paper link or search URL> ;
+        URL: <exact direct paper URL from search result> ;
         
         Please strictly follow this format, ONLY return these five items (Title, Occupation, Demographics, Country, URL), keep words short and precise, and do not add rationale.
         """)
         return prompt
+
+    @classmethod
+    def _title_tokens(cls, text: str) -> set[str]:
+        words = re.findall(r"[a-z0-9]{4,}", (text or "").lower())
+        return {w for w in words if w not in cls._STOPWORDS}
+
+    @classmethod
+    def _verify_and_resolve_url(
+        cls,
+        url: str,
+        expected_title: str,
+        chunk_title: str = "",
+        is_grounding: bool = False,
+    ) -> tuple[bool, str, str, int]:
+        """Validates that a candidate URL does not 404 and matches the expected paper title."""
+        if not url or not url.startswith(("http://", "https://")):
+            return False, url, "", 0
+
+        expected_tokens = cls._title_tokens(expected_title)
+        min_overlap = 1 if len(expected_tokens) <= 2 else 2
+
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=3.5) as resp:
+                status = getattr(resp, "status", 200)
+                final_url = resp.geturl() or url
+                if status and status >= 400:
+                    return False, final_url, "", 0
+                raw_bytes = resp.read(24576)
+                html_text = raw_bytes.decode("utf-8", errors="ignore")
+        except urllib.error.HTTPError as e:
+            final_url = getattr(e, "url", None) or url
+            if e.code in (400, 404, 410) or e.code >= 500:
+                return False, final_url, "", 0
+            # Some academic publishers return 403/429 to automated requests; accept only if
+            # the URL came from Google Search grounding and the chunk title / URL slug matches.
+            if is_grounding and expected_tokens:
+                cand_tokens = cls._title_tokens(f"{chunk_title} { urllib.parse.unquote(final_url) }")
+                overlap = len(expected_tokens & cand_tokens)
+                if overlap >= min_overlap:
+                    return True, final_url, chunk_title, overlap
+            return False, final_url, "", 0
+        except Exception:
+            return False, url, "", 0
+
+        t_match = re.search(r"<title[^>]*>(.*?)</title>", html_text, re.IGNORECASE | re.DOTALL)
+        html_title = re.sub(r"\s+", " ", t_match.group(1)).strip() if t_match else ""
+        lower_title = html_title.lower()
+
+        error_markers = (
+            "404",
+            "page not found",
+            "article not found",
+            "document not found",
+            "error - pmc",
+            "doi not found",
+            "bad request",
+            "access denied",
+        )
+        if any(marker in lower_title for marker in error_markers):
+            return False, final_url, html_title, 0
+
+        if expected_tokens:
+            cand_tokens = cls._title_tokens(
+                f"{chunk_title} {html_title} {urllib.parse.unquote(final_url)}"
+            )
+            overlap = len(expected_tokens & cand_tokens)
+            if overlap >= min_overlap:
+                return True, final_url, html_title or chunk_title, overlap
+            return False, final_url, html_title or chunk_title, 0
+
+        if html_title and len(cls._title_tokens(html_title)) >= 2:
+            return True, final_url, html_title, 1
+        return False, final_url, html_title, 0
 
     def _parse_result(
         self,
@@ -1168,12 +1285,11 @@ class CredibleSourceGenerator:
         topic: str,
         keywords_str: str,
     ) -> dict[str, Any]:
-        paper_urls: list[str] = []
-        paper_titles: list[str] = []
+        grounding_pairs: list[tuple[str, str]] = []
         full_response = result.full_response
         content = result.generated_content.strip()
 
-        # 1. Grounding Metadata from Google Search chunks
+        # 1. Grounding Metadata from Google Search chunks (keep URI and title paired)
         if full_response and hasattr(full_response, "candidates") and full_response.candidates:
             cand = full_response.candidates[0]
             grounding_metadata = getattr(cand, "grounding_metadata", None)
@@ -1182,12 +1298,10 @@ class CredibleSourceGenerator:
                 for chunk in chunks:
                     web = getattr(chunk, "web", None)
                     if web:
-                        uri = getattr(web, "uri", None)
-                        title = getattr(web, "title", None)
-                        if uri and uri not in paper_urls:
-                            paper_urls.append(uri)
-                        if title and title not in paper_titles:
-                            paper_titles.append(title)
+                        uri = getattr(web, "uri", None) or ""
+                        title = getattr(web, "title", None) or ""
+                        if uri and all(uri != u for u, _ in grounding_pairs):
+                            grounding_pairs.append((uri, title))
 
         # 2. Parse text content
         t_m = re.search(r'(?:\*{0,2}Title\*{0,2}:|\*{0,2}Title:\*{0,2})\s*([^\n;]+)', content, re.IGNORECASE)
@@ -1200,40 +1314,55 @@ class CredibleSourceGenerator:
         extracted_demo = re.sub(r'[*"\'`]', '', demo_match.group(1)).strip() if demo_match else ""
         extracted_country = re.sub(r'[*"\'`]', '', country_match.group(1)).strip() if country_match else ""
 
-        # Extract URL field from text
+        text_urls: list[str] = []
         u_m = re.search(r'(?:URL|Link)[*:\s]+(https?://[^\s<>"\'\);]+)', content, re.IGNORECASE)
         if u_m:
             u_val = u_m.group(1).strip()
-            if u_val not in paper_urls:
-                paper_urls.append(u_val)
+            if u_val not in text_urls:
+                text_urls.append(u_val)
 
-        # Extract any in-text URLs
         for u in re.findall(r'https?://[^\s<>"\'\);]+', content):
-            if u not in paper_urls:
-                paper_urls.append(u)
+            if u not in text_urls:
+                text_urls.append(u)
 
-        # 3. Grounding Metadata from search_entry_point chips
-        if full_response and hasattr(full_response, "candidates") and full_response.candidates:
-            cand = full_response.candidates[0]
-            grounding_metadata = getattr(cand, "grounding_metadata", None)
-            if grounding_metadata and getattr(grounding_metadata, "search_entry_point", None):
-                html = grounding_metadata.search_entry_point.rendered_content or ""
-                chips = re.findall(r'<a[^>]+href=[\'"]([^\'"]+)[\'"][^>]*>([^<]+)</a>', html)
-                for chip_url, chip_label in chips:
-                    if chip_url not in paper_urls:
-                        paper_urls.append(chip_url)
-                    if chip_label and chip_label not in paper_titles:
-                        paper_titles.append(chip_label)
+        display_title = extracted_title
+        if not display_title and grounding_pairs:
+            for _, g_title in grounding_pairs:
+                if g_title and len(self._title_tokens(g_title)) >= 2:
+                    display_title = g_title.strip()
+                    break
 
-        if extracted_title:
-            if not paper_titles:
-                paper_titles.append(extracted_title)
-            elif extracted_title not in paper_titles:
-                paper_titles.insert(0, extracted_title)
-
-        display_title = paper_titles[0] if paper_titles else extracted_title
         if display_title and display_title.strip().lower() != "could not find":
-            first_url = paper_urls[0] if paper_urls else f"https://scholar.google.com/scholar?q={urllib.parse.quote_plus(display_title)}"
+            best_url = ""
+            best_score = 0
+
+            # Check grounding chunks first
+            for g_uri, g_title in grounding_pairs[:4]:
+                ok, resolved_url, _, score = self._verify_and_resolve_url(
+                    g_uri, display_title, chunk_title=g_title, is_grounding=True
+                )
+                if ok and score > best_score:
+                    best_url = resolved_url
+                    best_score = score
+
+            # If no grounding chunk matched, verify text URLs strictly (must HTTP 200 & match title)
+            if not best_url:
+                for t_url in text_urls[:2]:
+                    if "scholar.google.com/scholar" in t_url or "google.com/search" in t_url:
+                        continue
+                    ok, resolved_url, _, score = self._verify_and_resolve_url(
+                        t_url, display_title, chunk_title="", is_grounding=False
+                    )
+                    if ok and score > best_score:
+                        best_url = resolved_url
+                        best_score = score
+
+            # Fallback to Google Scholar search for the exact paper title so it never 404s or mismatches
+            first_url = (
+                best_url
+                if best_url
+                else f"https://scholar.google.com/scholar?q={urllib.parse.quote_plus(display_title)}"
+            )
             paper_urls = [first_url]
             paper_titles = [display_title]
             url_val = [first_url]
@@ -1243,21 +1372,7 @@ class CredibleSourceGenerator:
                 f"Demographics: {extracted_demo or 'N/A'} ;\n"
                 f"Country: {extracted_country or 'N/A'}"
             )
-        elif paper_urls:
-            # Pick first Google search URL directly and save the link
-            first_url = paper_urls[0]
-            first_title = paper_titles[0] if paper_titles else "Published Research Paper"
-            paper_urls = [first_url]
-            paper_titles = [first_title]
-            url_val = [first_url]
-            paper_content = (
-                f"Title: {first_title} ;\n"
-                f"Occupation: {extracted_occ or 'N/A'} ;\n"
-                f"Demographics: {extracted_demo or 'N/A'} ;\n"
-                f"Country: {extracted_country or 'N/A'}"
-            )
         else:
-            # If no research paper is returned by google search, set title to "Could not find"
             paper_urls = []
             paper_titles = ["Could not find"]
             url_val = []
@@ -1268,6 +1383,8 @@ class CredibleSourceGenerator:
             "paper_titles": paper_titles,
             "url": url_val,
             "paper_content": paper_content,
+            "extracted_occ": extracted_occ,
+            "extracted_demo": extracted_demo,
         }
 
     def generate_for_node(
@@ -1380,11 +1497,23 @@ class CredibleSourceGenerator:
                     "paper_titles": ["Could not find"],
                     "url": [],
                     "paper_content": "Could not find",
+                    "extracted_occ": "",
+                    "extracted_demo": "",
                 }
             paper_urls_col.append(data["paper_urls"])
             paper_titles_col.append(data["paper_titles"])
             url_col.append(data["url"])
             paper_content_col.append(data["paper_content"])
+
+            if "user_group" in df_out.columns:
+                curr_ug = str(df_out.at[idx, "user_group"] or "").strip()
+                if not curr_ug or curr_ug.lower() in ("general public", "general population", "all users", "everyone", "n/a", "none"):
+                    occ = str(data.get("extracted_occ") or "").strip()
+                    demo = str(data.get("extracted_demo") or "").strip()
+                    if occ and occ.lower() not in ("n/a", "none", "general public", "unspecified"):
+                        df_out.at[idx, "user_group"] = occ
+                    elif demo and demo.lower() not in ("n/a", "none", "general public", "unspecified"):
+                        df_out.at[idx, "user_group"] = demo
 
         df_out["paper_urls"] = paper_urls_col
         df_out["paper_titles"] = paper_titles_col
