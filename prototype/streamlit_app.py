@@ -1033,13 +1033,24 @@ if st.session_state.step == "Home":
                 st.session_state.show_dynamic_cloud_info = True
 
         if st.session_state.get("show_dynamic_cloud_info"):
-            st.info("ℹ️ For dynamic workflow using your own API key, you need to visit https://github.com/google-research/nodesynth_ .\n\nDue to security reasons, dynamic flow powered by API keys is not supported. Please setup the webapp locally using the instructions mentioned in the Google Research repo.")
+            st.info("ℹ️ For dynamic workflow using your own API key, you need to visit https://github.com/google-research/nodesyn .\n\nDue to security reasons, dynamic flow powered by API keys is not supported. Please setup the webapp locally using the instructions mentioned in the Google Research repo.")
 
 elif st.session_state.step == "Read Me":
     st.title("📖 User Guide: NodeSyn")
 
     st.markdown(
         "Welcome to the NodeSyn prototype. NodeSyn is a systematic, social-science-informed, and evidence-grounded methodology for generating socially relevant synthetic queries for AI model evaluation. It enables a holistic assessment of model behavior across sensitive domains and complex policies."
+    )
+
+    st.markdown(
+        """
+    <div style="background-color: #fffbeb; padding: 1rem 1.25rem; border-radius: 0.5rem; border: 1px solid #fde68a; border-left: 4px solid #f59e0b; margin-bottom: 1rem;">
+        <p style="color: #92400e; line-height: 1.5; margin: 0; font-size: 0.95rem;">
+            <strong>⚠️ Disclosure:</strong> The data presented in this application is for demonstration purposes only and is not intended to reflect any model performance.
+        </p>
+    </div>
+    """,
+        unsafe_allow_html=True,
     )
 
 
@@ -1829,9 +1840,14 @@ elif st.session_state.step == "Data":
         df_work['prompts'] = df_work['prompts'].astype(str)
         df_work = df_work.dropna(subset=['prompts']).drop_duplicates(subset=['Domain', 'level1', 'level2', 'level3', 'prompts']).copy()
 
-        # Split and use all modalities selected on Concept page equally across rows
+        # Split and use all modalities selected on Concept page equally across rows in dynamic mode; filter in static mode
         if user_modalities:
-            df_work['model_modality'] = [user_modalities[i % len(user_modalities)] for i in range(len(df_work))]
+            if is_dynamic:
+                df_work['model_modality'] = [user_modalities[i % len(user_modalities)] for i in range(len(df_work))]
+            else:
+                df_modal_match = df_work[df_work['model_modality'].isin(user_modalities)]
+                if not df_modal_match.empty:
+                    df_work = df_modal_match.copy()
         # Multi-signal complexity score
         def compute_complexity(text):
             text = str(text)
@@ -2166,6 +2182,8 @@ elif st.session_state.step == "Data":
         if st.button("Next: Setup Evaluation", type="primary"):
             st.session_state.highest_step = max(st.session_state.highest_step, 5)
             st.session_state.step = "Evaluation"
+            st.session_state.static_eval_started = False
+            st.session_state.static_eval_selected_model = None
             st.rerun()
 
 elif st.session_state.step == "Evaluation":
@@ -2544,8 +2562,8 @@ elif st.session_state.step == "Evaluation":
                         mapping['Gemini'] = m
                     elif 'gpt' in m.lower():
                         mapping['GPT'] = m
-                    elif 'llama' in m.lower():
-                        mapping['Llama'] = m
+                    elif 'qwen' in m.lower():
+                        mapping['Qwen'] = m
                     elif 'claude' in m.lower():
                         mapping['Claude'] = m
                     else:
@@ -2555,24 +2573,36 @@ elif st.session_state.step == "Evaluation":
                 selected_display = st.selectbox("Model", display_names, label_visibility="collapsed", key="selected_model_display")
                 selected_model = mapping[selected_display]
 
-            filtered_df = eval_df.copy()
-            cols_to_drop = [c for c in ['data_source', 'dataset_source'] if c in filtered_df.columns]
-            if cols_to_drop:
-                filtered_df = filtered_df.drop(columns=cols_to_drop)
-            
-            # Filter strictly by modality defined on Concept page
-            if user_modalities and 'model_modality' in filtered_df.columns:
-                mod_match = filtered_df[filtered_df['model_modality'].isin(user_modalities)]
-                if not mod_match.empty:
-                    filtered_df = mod_match
+                st.write("")
+                if st.button("Get Responses", type="primary", key="start_static_eval_btn"):
+                    st.session_state.static_eval_started = True
+                    st.session_state.static_eval_selected_model = selected_model
+                    st.session_state.static_eval_selected_display = selected_display
+                    st.rerun()
 
-            if selected_model != 'All':
-                filtered_df = filtered_df[filtered_df['target_model'] == selected_model]
+            if st.session_state.get("static_eval_started", False):
+                shown_model = st.session_state.get("static_eval_selected_model", selected_model)
+                if selected_model != shown_model:
+                    st.info(f"💡 You selected **{selected_display}**. Click **'Get Responses'** above to refresh the table with {selected_display} responses.")
 
-            if not filtered_df.empty:
-                n_total = len(filtered_df)
+                filtered_df = eval_df.copy()
+                cols_to_drop = [c for c in ['data_source', 'dataset_source'] if c in filtered_df.columns]
+                if cols_to_drop:
+                    filtered_df = filtered_df.drop(columns=cols_to_drop)
+                
+                # Filter strictly by modality defined on Concept page
+                if user_modalities and 'model_modality' in filtered_df.columns:
+                    mod_match = filtered_df[filtered_df['model_modality'].isin(user_modalities)]
+                    if not mod_match.empty:
+                        filtered_df = mod_match
 
-                st.markdown(f"""
+                if shown_model != 'All':
+                    filtered_df = filtered_df[filtered_df['target_model'] == shown_model]
+
+                if not filtered_df.empty:
+                    n_total = len(filtered_df)
+
+                    st.markdown(f"""
 <div style="display: flex; align-items: center; gap: 0.75rem; margin-top: 2rem; margin-bottom: 1rem;">
 <div style="background-color: #e0e7ff; border-radius: 8px; padding: 0.5rem; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px;">
 <span style="font-size: 1.5rem;">📋</span>
@@ -2581,51 +2611,53 @@ elif st.session_state.step == "Evaluation":
 </div>
 """, unsafe_allow_html=True)
 
-                display_df = filtered_df[['query', 'response', 'target_model', 'model_modality']].copy()
-                
-                def clean_query(q):
-                    if isinstance(q, str) and q.strip().startswith('['):
-                        try:
-                            parsed = ast.literal_eval(q)
-                            if isinstance(parsed, list) and len(parsed) > 0:
-                                return parsed[0]
-                        except:
-                            pass
-                    return q
-                
-                display_df['query'] = display_df['query'].apply(clean_query)
-                display_df = display_df.rename(columns={'target_model': 'model name', 'model_modality': 'modality'})
-                display_df = display_df.reset_index(drop=True)
-                display_df.insert(0, '#', list(range(1, len(display_df) + 1)))
-                display_df.index = range(1, len(display_df) + 1)
+                    display_df = filtered_df[['query', 'response', 'target_model', 'model_modality']].copy()
+                    
+                    def clean_query(q):
+                        if isinstance(q, str) and q.strip().startswith('['):
+                            try:
+                                parsed = ast.literal_eval(q)
+                                if isinstance(parsed, list) and len(parsed) > 0:
+                                    return parsed[0]
+                            except:
+                                pass
+                        return q
+                    
+                    display_df['query'] = display_df['query'].apply(clean_query)
+                    display_df = display_df.rename(columns={'target_model': 'model name', 'model_modality': 'modality'})
+                    display_df = display_df.reset_index(drop=True)
+                    display_df.insert(0, '#', list(range(1, len(display_df) + 1)))
+                    display_df.index = range(1, len(display_df) + 1)
 
-                col_btn, _ = st.columns([1, 2])
-                with col_btn:
-                    csv_data = display_df.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="📥 Download Evaluation Data (CSV)",
-                        data=csv_data,
-                        file_name='evaluation_data.csv',
-                        mime='text/csv',
-                        use_container_width=True
+                    col_btn, _ = st.columns([1, 2])
+                    with col_btn:
+                        csv_data = display_df.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="📥 Download Evaluation Data (CSV)",
+                            data=csv_data,
+                            file_name='evaluation_data.csv',
+                            mime='text/csv',
+                            use_container_width=True
+                        )
+
+                    st.dataframe(
+                        display_df,
+                        use_container_width=True,
+                        height=600,
+                        hide_index=True,
+                        column_config={
+                            "#": st.column_config.NumberColumn("#", width="small"),
+                            "query": st.column_config.TextColumn("Query", width="large"),
+                            "modality": st.column_config.TextColumn("Modality", width="small"),
+                            "model name": st.column_config.TextColumn("Model Name", width="medium"),
+                            "response": st.column_config.TextColumn("Response", width="large"),
+                        }
                     )
 
-                st.dataframe(
-                    display_df,
-                    use_container_width=True,
-                    height=600,
-                    hide_index=True,
-                    column_config={
-                        "#": st.column_config.NumberColumn("#", width="small"),
-                        "query": st.column_config.TextColumn("Query", width="large"),
-                        "modality": st.column_config.TextColumn("Modality", width="small"),
-                        "model name": st.column_config.TextColumn("Model Name", width="medium"),
-                        "response": st.column_config.TextColumn("Response", width="large"),
-                    }
-                )
-
+                else:
+                    st.info("No data found for the selected combination.")
             else:
-                st.info("No data found for the selected combination.")
+                st.info("👆 Select a target model above and click **'Get Responses'** to display the evaluation data.")
                     
         else:
             st.warning("Could not load evaluation_data.csv")
@@ -2886,7 +2918,7 @@ Non-Compliant - Safety Violation
 <span style="font-size: 1.1rem;">🤖</span>
 <label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Autorater model</label>
 </div>""", unsafe_allow_html=True)
-            selected_model = st.selectbox("Autorater model", ["Gemini", "GPT"], key="static_autorater_model_select", label_visibility="collapsed")
+            selected_model = st.selectbox("Autorater model", ["Gemini"], key="static_autorater_model_select", label_visibility="collapsed")
             
             if st.button("Rate", type="primary", key="start_autorater_btn"):
                 st.session_state.annotation_started = True
@@ -2975,9 +3007,6 @@ Non-Compliant - Safety Violation
                         'response': eval_df['response'],
                         'label': label_series
                     })
-                    display_df = display_df.reset_index(drop=True)
-                    display_df.insert(0, '#', list(range(1, len(display_df) + 1)))
-                    display_df.index = range(1, len(display_df) + 1)
 
                     n_rated = len(display_df)
                     n_unique_labels = display_df['label'].nunique()
@@ -2999,6 +3028,25 @@ Non-Compliant - Safety Violation
 </div>
 </div>
 """, unsafe_allow_html=True)
+
+                    # --- Table Filters (Model Name & Autorater Label) ---
+                    st.markdown('<div style="margin-top: 0.5rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;"><span style="color: #6366f1; font-size: 14px;">🔍</span><span style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Table Filters</span></div>', unsafe_allow_html=True)
+                    col_af1, col_af2 = st.columns(2)
+                    with col_af1:
+                        af_model_options = sorted(display_df['model name'].dropna().unique().tolist())
+                        selected_af_models = st.multiselect("Model Name", options=af_model_options, placeholder="All Models", key="static_autorater_filter_model")
+                    with col_af2:
+                        af_label_options = sorted(display_df['label'].dropna().unique().tolist())
+                        selected_af_labels = st.multiselect("Autorater Label", options=af_label_options, placeholder="All Autorater Labels", key="static_autorater_filter_label")
+
+                    if selected_af_models:
+                        display_df = display_df[display_df['model name'].isin(selected_af_models)]
+                    if selected_af_labels:
+                        display_df = display_df[display_df['label'].isin(selected_af_labels)]
+
+                    display_df = display_df.reset_index(drop=True)
+                    display_df.insert(0, '#', list(range(1, len(display_df) + 1)))
+                    display_df.index = range(1, len(display_df) + 1)
 
                     col_dl, _ = st.columns([1.5, 1])
                     with col_dl:
@@ -3262,20 +3310,24 @@ elif st.session_state.step == "Analysis":
         "Gemini 3.1 Flash-Lite": {"line": "#0ea5e9", "fill": "rgba(14,165,233,0.08)"},
         "Gemini Flash Latest": {"line": "#4f46e5", "fill": "rgba(79,70,229,0.08)"},
         "Gemini Flash": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
+        "Gemini 2.5 flash": {"line": "#4f46e5", "fill": "rgba(79,70,229,0.08)"},
         # OpenAI
         "GPT-4o": {"line": "#10b981", "fill": "rgba(16,185,129,0.08)"},
         "GPT-4o Mini": {"line": "#059669", "fill": "rgba(5,150,105,0.08)"},
+        "GPT o4-mini": {"line": "#10b981", "fill": "rgba(16,185,129,0.08)"},
         "o3-mini": {"line": "#047857", "fill": "rgba(4,120,87,0.08)"},
         "o1": {"line": "#065f46", "fill": "rgba(6,95,70,0.08)"},
         # Claude
         "Claude Sonnet 4.6": {"line": "#d97706", "fill": "rgba(217,119,6,0.08)"},
         "Claude Sonnet 4.5": {"line": "#f59e0b", "fill": "rgba(245,158,11,0.08)"},
         "Claude Haiku 4.5": {"line": "#b45309", "fill": "rgba(180,83,9,0.08)"},
+        "Claude 4.5 Haiku": {"line": "#d97706", "fill": "rgba(217,119,6,0.08)"},
         "Claude Opus 4.6": {"line": "#92400e", "fill": "rgba(146,64,14,0.08)"},
         "Claude 3.7 Sonnet": {"line": "#d97706", "fill": "rgba(217,119,6,0.08)"},
         "Claude 3.5 Sonnet": {"line": "#f59e0b", "fill": "rgba(245,158,11,0.08)"},
         "Claude 3.5 Haiku": {"line": "#b45309", "fill": "rgba(180,83,9,0.08)"},
-        # Llama
+        # Qwen & Llama
+        "Qwen 3 235B": {"line": "#ec4899", "fill": "rgba(236,72,153,0.08)"},
         "Llama 3.3 70B": {"line": "#ec4899", "fill": "rgba(236,72,153,0.08)"},
         "Llama 3.1 8B": {"line": "#db2777", "fill": "rgba(219,39,119,0.08)"},
     }
@@ -3298,6 +3350,8 @@ elif st.session_state.step == "Analysis":
             return MODEL_COLORS["GPT-4o"]
         if "claude" in m_low or "anthropic" in m_low:
             return MODEL_COLORS["Claude Sonnet 4.6"]
+        if "qwen" in m_low:
+            return MODEL_COLORS["Qwen 3 235B"]
         if "llama" in m_low or "meta" in m_low:
             return MODEL_COLORS["Llama 3.3 70B"]
         return DEFAULT_PALETTE[idx % len(DEFAULT_PALETTE)]
@@ -3341,7 +3395,7 @@ elif st.session_state.step == "Analysis":
             textfont=dict(size=13, family="'Inter', sans-serif"),
             showscale=show_colorbar,
             colorbar=dict(
-                title=dict(text="Rate (%)<br>", font=dict(family="'Inter', sans-serif", size=13, color="#334155"), side="top"),
+                title=dict(text="Rate (%)<br>&nbsp;", font=dict(family="'Inter', sans-serif", size=13, color="#334155"), side="top"),
                 thickness=14, len=0.75,
                 ticksuffix="%",
                 outlinewidth=0,
@@ -3404,7 +3458,7 @@ elif st.session_state.step == "Analysis":
     <div style="position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, #6366f1, #818cf8);"></div>
     <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
       <div style="width: 36px; height: 36px; background: #eef2ff; border-radius: 10px; display: flex; align-items: center; justify-content: center;"><span style="font-size: 1.1rem;">📋</span></div>
-      <span style="font-size: 0.78rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-family: 'Inter', sans-serif;">Total Queries</span>
+      <span style="font-size: 0.78rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-family: 'Inter', sans-serif;">Total instances</span>
     </div>
     <div style="font-size: 2rem; font-weight: 800; color: #0f172a; letter-spacing: -0.025em; font-family: 'Inter', sans-serif;">{total_queries:,}</div>
     <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.25rem; font-family: 'Inter', sans-serif;">across {len(df_med_plot_cleaned['Model'].unique())} models</div>
@@ -4136,7 +4190,7 @@ elif st.session_state.step == "Analysis":
                     z=hm.values, x=hm.columns.tolist(), y=hm.index.tolist(),
                     showscale=(i == n_m - 1),
                     colorbar=dict(
-                        title=dict(text="Rate (%)<br>", font=dict(family="'Inter', sans-serif", size=12, color="#334155"), side="top"),
+                        title=dict(text="Rate (%)<br>&nbsp;", font=dict(family="'Inter', sans-serif", size=12, color="#334155"), side="top"),
                         thickness=14, len=0.85, x=1.02, ticksuffix="%",
                         tickfont=dict(family="'Inter', sans-serif", size=11, color="#64748b"),
                         outlinewidth=0,
