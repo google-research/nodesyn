@@ -1037,16 +1037,18 @@ elif st.session_state.step == "Read Me":
         "🔗 **GitHub Repository:** [https://github.com/google-research/nodesyn](https://github.com/google-research/nodesyn)"
     )
 
-    st.markdown(
-        """
-    <div style="background-color: #fffbeb; padding: 1rem 1.25rem; border-radius: 0.5rem; border: 1px solid #fde68a; border-left: 4px solid #f59e0b; margin-bottom: 1rem;">
-        <p style="color: #92400e; line-height: 1.5; margin: 0; font-size: 0.95rem;">
-            <strong>⚠️ Disclosure:</strong> The data presented in this application is for demonstration purposes only and is not intended to reflect any model performance.
-        </p>
-    </div>
-    """,
-        unsafe_allow_html=True,
-    )
+    is_dynamic = st.session_state.get("data_mode") == "dynamic"
+    if not is_dynamic:
+        st.markdown(
+            """
+        <div style="background-color: #fffbeb; padding: 1rem 1.25rem; border-radius: 0.5rem; border: 1px solid #fde68a; border-left: 4px solid #f59e0b; margin-bottom: 1rem;">
+            <p style="color: #92400e; line-height: 1.5; margin: 0; font-size: 0.95rem;">
+                <strong>⚠️ Disclosure:</strong> The data presented in this application is for demonstration purposes only and is not intended to reflect any model performance.
+            </p>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
 
     # The Challenge
     st.markdown(
