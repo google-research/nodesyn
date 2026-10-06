@@ -10,6 +10,7 @@ from plotly.subplots import make_subplots
 import ast
 from collections import Counter
 import time
+import threading
 import json
 import textwrap
 import urllib.parse
@@ -841,6 +842,49 @@ def create_sankey_visualization(df_final):
     return fig
 
 
+@st.cache_resource
+def get_bg_eval_store() -> dict[str, Any]:
+    return {
+        "status": "idle",  # "idle" | "running" | "completed" | "error"
+        "progress": 0.0,
+        "message": "",
+        "result_df": None,
+        "more_prompts_df": None,
+        "error": None,
+        "mode": "initial",  # "initial" | "more"
+    }
+
+
+def sync_bg_eval_state():
+    bg_store = get_bg_eval_store()
+    if bg_store["status"] == "completed":
+        res_df = bg_store.get("result_df")
+        more_df = bg_store.get("more_prompts_df")
+        if more_df is not None and not more_df.empty and "demo_data" in st.session_state:
+            st.session_state.demo_data = pd.concat(
+                [st.session_state.demo_data, more_df], ignore_index=True
+            )
+        if res_df is not None and not res_df.empty:
+            if bg_store.get("mode") == "more" and "eval_data" in st.session_state and not st.session_state.eval_data.empty:
+                st.session_state.eval_data = pd.concat(
+                    [st.session_state.eval_data, res_df], ignore_index=True
+                )
+            else:
+                st.session_state.eval_data = res_df
+            st.session_state.eval_generated = True
+        bg_store["result_df"] = None
+        bg_store["more_prompts_df"] = None
+        bg_store["status"] = "idle"
+    elif bg_store["status"] == "error":
+        err = bg_store.get("error")
+        if bg_store.get("mode") == "more":
+            st.session_state.last_eval_more_error = err
+        else:
+            st.session_state.last_eval_error = err
+        bg_store["error"] = None
+        bg_store["status"] = "idle"
+
+
 # Application State
 if 'step' not in st.session_state:
     st.session_state.step = "Home"
@@ -851,17 +895,19 @@ if 'data_mode' not in st.session_state:
 if 'highest_step' not in st.session_state:
     st.session_state.highest_step = 0
 
-if 'modality' not in st.session_state:
-    st.session_state.modality = ["text-to-image", "text-to-video", "text-to-text"]
-
 if 'saved_modality' not in st.session_state:
     st.session_state.saved_modality = ["text-to-image", "text-to-video", "text-to-text"]
+
+if 'modality' not in st.session_state:
+    st.session_state.modality = list(st.session_state.saved_modality)
 
 if 'demo_data' not in st.session_state:
     try:
         st.session_state.demo_data = load_data("NodeSyn_Data_med_Full_Export.csv")
     except:
         st.session_state.demo_data = pd.DataFrame()
+
+sync_bg_eval_state()
 
 
 def set_step(new_step):
@@ -882,7 +928,12 @@ with st.sidebar:
             else:
                 st.button(f"{icons[i]} {step}", key=f"nav_{step}", use_container_width=True, on_click=set_step, args=(step,), disabled=is_disabled)
         st.markdown("---")
-        st.info("⚡ Dynamic Mode: Live Gemini API generation.")
+        bg_store = get_bg_eval_store()
+        if bg_store.get("status") == "running":
+            pct_int = int(bg_store.get("progress", 0.0) * 100)
+            st.info(f"⏳ Background Evaluation Running ({pct_int}%): {bg_store.get('message', 'Generating responses...')}")
+        else:
+            st.info("⚡ Dynamic Mode: Live Gemini API generation.")
     elif st.session_state.get('data_mode') == 'static':
         steps = ["Home", "Read Me", "Concept", "Taxonomy", "Data", "Evaluation", "Autorater", "Analysis"]
         icons = ["🏠", "📖", "💡", "🕸️", "🗄️", "✅", "📝", "📊"]
@@ -1064,7 +1115,7 @@ elif st.session_state.step == "Read Me":
     st.markdown("### 🔄 End-to-End Workflow")
     st.markdown(
         """
-    1. **Concept Setup:** Define the overarching theme (e.g., "Cultural Bias") and operational constraints (countries, languages, modality).
+    1. **Concept Setup:** Define the overarching theme (e.g., "Medical Advice") and operational constraints (countries, languages, modality).
     2. **Taxonomy Generation:** The system leverages a structured taxonomy generation pipeline to intelligently extrapolate a hierarchical vocabulary (L1, L2, L3), grounding abstract concepts in concrete, granular scenarios.
        > ⚠️ **Disclosure:** Research citations in taxonomy generation are retrieved using Google Search and may contain invalid research paper links.
     3. **Data Synthesis:** We generate synthetic examples, anchoring them in intersections of sensitive attributes and complex societal contexts.
@@ -1241,8 +1292,10 @@ elif st.session_state.step == "Concept":
 <label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Modality</label>
 </div>""", unsafe_allow_html=True)
             if 'modality' not in st.session_state or not st.session_state.modality:
-                st.session_state.modality = ["text-to-image", "text-to-video", "text-to-text"]
+                st.session_state.modality = list(st.session_state.get('saved_modality', ["text-to-image", "text-to-video", "text-to-text"]))
             st.multiselect("Modality", ["text-to-image", "text-to-video", "text-to-text"], default=st.session_state.modality, key="modality", label_visibility="collapsed")
+            if st.session_state.get('modality'):
+                st.session_state.saved_modality = list(st.session_state.modality)
 
             if is_dynamic:
                 active_api_keys = get_app_api_keys()
@@ -1286,7 +1339,9 @@ elif st.session_state.step == "Concept":
             if st.button("Generate Taxonomy (Simulated)", type="primary"):
                 st.session_state.saved_concept = st.session_state.target_concept
                 st.session_state.saved_countries = st.session_state.target_countries
-                st.session_state.saved_modality = st.session_state.get('modality', ["text-to-image", "text-to-video", "text-to-text"])
+                st.session_state.saved_modality = list(st.session_state.get('modality', ["text-to-image", "text-to-video", "text-to-text"]))
+                st.session_state.pop("eval_filtered_data", None)
+                st.session_state.pop("eval_filtered_modalities", None)
                 with st.spinner("Generating Taxonomy (Simulated)..."):
                     time.sleep(1)
                     if st.session_state.target_concept == "Medical Advice":
@@ -1318,12 +1373,14 @@ elif st.session_state.step == "Concept":
                     lang_code = st.session_state.get("language_code", "en")
                     dom_def = st.session_state.get("description", "")
                     u_case = st.session_state.get("use_case", "Advice seeking")
-                    modal_val = st.session_state.get("modality", ["text-to-image", "text-to-video", "text-to-text"])
+                    modal_val = list(st.session_state.get("modality", ["text-to-image", "text-to-video", "text-to-text"]))
 
                     st.session_state.saved_concept = domain
                     st.session_state.saved_countries = st.session_state.target_countries
                     st.session_state.saved_modality = modal_val
                     st.session_state.active_tax_model = selected_tax_model
+                    st.session_state.pop("eval_filtered_data", None)
+                    st.session_state.pop("eval_filtered_modalities", None)
 
                     progress_bar = st.progress(0.0)
                     status_text = st.empty()
@@ -1370,7 +1427,7 @@ elif st.session_state.step == "Taxonomy":
     # Hero banner
     concept_name = st.session_state.get('saved_concept', 'Medical Advice')
     regions = ', '.join(st.session_state.get('saved_countries', ['Global']))
-    user_modalities = st.session_state.get('modality', st.session_state.get('saved_modality', ['text-to-text', 'text-to-image', 'text-to-video']))
+    user_modalities = st.session_state.get('saved_modality', st.session_state.get('modality', ['text-to-text', 'text-to-image', 'text-to-video']))
     if isinstance(user_modalities, str):
         user_modalities = [user_modalities]
     modality_str = ', '.join(user_modalities) if user_modalities else 'All Modalities'
@@ -2104,28 +2161,30 @@ elif st.session_state.step == "Data":
         col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
             l1_options = sorted(display_df['L1 Category'].dropna().unique().tolist())
-            selected_l1 = st.multiselect("L1 Category", options=l1_options, placeholder="All L1 Categories")
+            selected_l1 = st.multiselect("L1 Category", options=l1_options, placeholder="All L1 Categories", key="data_filter_l1")
         with col_f2:
             l2_options = sorted(display_df['L2 Subtopic'].dropna().unique().tolist())
-            selected_l2 = st.multiselect("L2 Subtopic", options=l2_options, placeholder="All Subtopics")
+            selected_l2 = st.multiselect("L2 Subtopic", options=l2_options, placeholder="All Subtopics", key="data_filter_l2")
         with col_f3:
             l3_options = sorted(display_df['L3 Leaf'].dropna().unique().tolist())
-            selected_l3 = st.multiselect("L3 Leaf", options=l3_options, placeholder="All L3 Leafs")
+            selected_l3 = st.multiselect("L3 Leaf", options=l3_options, placeholder="All L3 Leafs", key="data_filter_l3")
         with col_f4:
             mod_options = sorted(display_df['Modality'].dropna().unique().tolist())
-            selected_mod = st.multiselect("Modality", options=mod_options, placeholder="All Modalities")
+            selected_mod = st.multiselect("Modality", options=mod_options, placeholder="All Modalities", key="data_filter_mod")
 
-        # Apply filters
+        # Apply filters to both display_df and underlying df_work
+        filtered_mask = pd.Series(True, index=display_df.index)
         if selected_l1:
-            display_df = display_df[display_df['L1 Category'].isin(selected_l1)]
+            filtered_mask &= display_df['L1 Category'].isin(selected_l1)
         if selected_l2:
-            display_df = display_df[display_df['L2 Subtopic'].isin(selected_l2)]
+            filtered_mask &= display_df['L2 Subtopic'].isin(selected_l2)
         if selected_l3:
-            display_df = display_df[display_df['L3 Leaf'].isin(selected_l3)]
+            filtered_mask &= display_df['L3 Leaf'].isin(selected_l3)
         if selected_mod:
-            display_df = display_df[display_df['Modality'].isin(selected_mod)]
+            filtered_mask &= display_df['Modality'].isin(selected_mod)
 
-        display_df = display_df.reset_index(drop=True)
+        filtered_work_df = df_work.loc[filtered_mask].reset_index(drop=True)
+        display_df = display_df.loc[filtered_mask].reset_index(drop=True)
         display_df.insert(0, '#', list(range(1, len(display_df) + 1)))
         display_df.index = range(1, len(display_df) + 1)
 
@@ -2141,12 +2200,19 @@ elif st.session_state.step == "Data":
                 use_container_width=True
             )
 
-        # Interactive Data Table
-        st.dataframe(
+        st.caption(
+            f"💡 **Tip:** Use the **Table Filters** above (or check specific rows in the table below) to choose which rows to forward to the Evaluation tab. Currently **{len(filtered_work_df)}** of **{len(df_work)}** rows match your filters."
+        )
+
+        # Interactive Data Table (supports optional row selection in addition to table filters)
+        table_selection = st.dataframe(
             display_df,
             use_container_width=True,
             height=600,
             hide_index=True,
+            on_select="rerun",
+            selection_mode="multi-row",
+            key="data_inspector_table",
             column_config={
                 "#": st.column_config.NumberColumn("#", width="small"),
                 "L1 Category": st.column_config.TextColumn("L1 Category", width="medium"),
@@ -2158,14 +2224,30 @@ elif st.session_state.step == "Data":
             }
         )
 
+        selected_row_indices = []
+        if table_selection and hasattr(table_selection, "selection") and getattr(table_selection.selection, "rows", None):
+            selected_row_indices = list(table_selection.selection.rows)
+
+        if selected_row_indices:
+            forwarded_eval_df = filtered_work_df.iloc[selected_row_indices].reset_index(drop=True)
+        else:
+            forwarded_eval_df = filtered_work_df.copy()
+
     else:
+        forwarded_eval_df = pd.DataFrame()
         st.warning("No dynamic taxonomy data loaded. Please configure a concept and generate taxonomy first.")
 
+    n_forwarded_rows = len(forwarded_eval_df)
     st.write("")
     if is_dynamic:
-        col_next, col_gen_more, col_new_concept, col_home = st.columns([1.5, 1.2, 1, 1])
+        col_next, col_gen_more, col_new_concept, col_home = st.columns([1.8, 1.2, 1, 1])
         with col_next:
-            if st.button("Next: Setup Evaluation ➔", type="primary", use_container_width=True):
+            if st.button(f"Next: Setup Evaluation ({n_forwarded_rows} Filtered Rows) ➔", type="primary", use_container_width=True):
+                st.session_state.eval_filtered_data = forwarded_eval_df.copy()
+                if not forwarded_eval_df.empty and 'model_modality' in forwarded_eval_df.columns:
+                    st.session_state.eval_filtered_modalities = sorted(forwarded_eval_df['model_modality'].dropna().unique().tolist())
+                else:
+                    st.session_state.eval_filtered_modalities = list(user_modalities)
                 st.session_state.highest_step = max(st.session_state.highest_step, 5)
                 st.session_state.step = "Evaluation"
                 st.rerun()
@@ -2211,7 +2293,12 @@ elif st.session_state.step == "Data":
                 on_retry=lambda: st.session_state.pop("last_prompt_error", None),
             )
     else:
-        if st.button("Next: Setup Evaluation", type="primary"):
+        if st.button(f"Next: Setup Evaluation ({n_forwarded_rows} Filtered Rows)", type="primary"):
+            st.session_state.eval_filtered_data = forwarded_eval_df.copy()
+            if not forwarded_eval_df.empty and 'model_modality' in forwarded_eval_df.columns:
+                st.session_state.eval_filtered_modalities = sorted(forwarded_eval_df['model_modality'].dropna().unique().tolist())
+            else:
+                st.session_state.eval_filtered_modalities = list(user_modalities)
             st.session_state.highest_step = max(st.session_state.highest_step, 5)
             st.session_state.step = "Evaluation"
             st.session_state.static_eval_started = False
@@ -2224,7 +2311,7 @@ elif st.session_state.step == "Evaluation":
 
     concept_name = st.session_state.get('saved_concept', 'Medical Advice')
     regions = ', '.join(st.session_state.get('saved_countries', ['Global']))
-    user_modalities = st.session_state.get('modality', st.session_state.get('saved_modality', ['text-to-text', 'text-to-image', 'text-to-video']))
+    user_modalities = st.session_state.get('eval_filtered_modalities') or st.session_state.get('saved_modality', st.session_state.get('modality', ['text-to-text', 'text-to-image', 'text-to-video']))
     if isinstance(user_modalities, str):
         user_modalities = [user_modalities]
     modality_str = ', '.join(user_modalities) if user_modalities else 'All Modalities'
@@ -2253,14 +2340,17 @@ elif st.session_state.step == "Evaluation":
 """, unsafe_allow_html=True)
 
     if is_dynamic:
-        source_df = st.session_state.get('demo_data', pd.DataFrame())
+        filtered_eval_source = st.session_state.get('eval_filtered_data', pd.DataFrame())
+        has_filtered_source = isinstance(filtered_eval_source, pd.DataFrame) and not filtered_eval_source.empty
+        source_df = filtered_eval_source.copy() if has_filtered_source else st.session_state.get('demo_data', pd.DataFrame())
+
         if source_df.empty:
             st.warning("⚠️ No synthesized prompts found. Please configure a concept and generate synthetic data first.")
             if st.button("⬅️ Go to Concept Page"):
                 st.session_state.step = "Concept"
                 st.rerun()
         else:
-            if user_modalities and 'model_modality' in source_df.columns:
+            if not has_filtered_source and user_modalities and 'model_modality' in source_df.columns:
                 mod_match = source_df[source_df['model_modality'].isin(user_modalities)]
                 if not mod_match.empty:
                     source_df = mod_match
@@ -2278,6 +2368,7 @@ elif st.session_state.step == "Evaluation":
                                     "level2": row.get('level2', 'General'),
                                     "level3": row.get('level3', 'General'),
                                     "country": row.get('extracted_Country', row.get('cleaned_Country', 'Global')),
+                                    "model_modality": row.get('model_modality', user_modalities[0] if user_modalities else 'text-to-text'),
                                 })
                     elif str(p_val).strip():
                         prompts_to_eval.append({
@@ -2286,16 +2377,17 @@ elif st.session_state.step == "Evaluation":
                             "level2": row.get('level2', 'General'),
                             "level3": row.get('level3', 'General'),
                             "country": row.get('extracted_Country', row.get('cleaned_Country', 'Global')),
+                            "model_modality": row.get('model_modality', user_modalities[0] if user_modalities else 'text-to-text'),
                         })
             
             all_unique_prompts = pd.DataFrame(prompts_to_eval).drop_duplicates(subset=['prompts']) if prompts_to_eval else pd.DataFrame()
-            if not all_unique_prompts.empty and user_modalities:
+            if not all_unique_prompts.empty and user_modalities and 'model_modality' not in all_unique_prompts.columns:
                 all_unique_prompts['model_modality'] = [
                     user_modalities[i % len(user_modalities)] for i in range(len(all_unique_prompts))
                 ]
-            prompts_eval_df = all_unique_prompts.head(50)
-            n_queries_available = len(all_unique_prompts)
-            n_display_queue = min(n_queries_available, 50) if n_queries_available > 0 else 50
+            prompts_eval_df = all_unique_prompts.copy() if has_filtered_source else all_unique_prompts.head(50)
+            n_queries_available = len(prompts_eval_df)
+            n_display_queue = n_queries_available if has_filtered_source else (min(n_queries_available, 50) if n_queries_available > 0 else 50)
 
             with st.container():
                 st.markdown("""
@@ -2324,77 +2416,120 @@ elif st.session_state.step == "Evaluation":
                                 target_model_tuples.append(model_tuple)
 
                 with col2:
+                    queue_subtitle = (
+                        "Forwarded from your filtered selection on the Data tab."
+                        if has_filtered_source
+                        else f"Synthesized from live taxonomy leaf nodes (batch size: {n_display_queue})."
+                    )
                     st.markdown(f"""
 <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.1rem; margin-top: 0.25rem;">
 <div style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Benchmark Query Queue</div>
-<div style="font-size: 1.5rem; font-weight: 800; color: #0f172a;">{n_display_queue} Grounded Queries</div>
-<div style="font-size: 12px; color: #64748b; margin-top: 2px;">Synthesized from live taxonomy leaf nodes (target batch: 50).</div>
+<div style="font-size: 1.5rem; font-weight: 800; color: #0f172a;">{n_display_queue} Filtered Queries</div>
+<div style="font-size: 12px; color: #64748b; margin-top: 2px;">{queue_subtitle}</div>
 </div>
 """, unsafe_allow_html=True)
 
+                bg_store = get_bg_eval_store()
+                is_bg_running = (bg_store.get("status") == "running")
+
                 st.write("")
-                col_gen, _ = st.columns([1.5, 3])
+                col_gen, _ = st.columns([1.6, 3])
                 with col_gen:
-                    if st.button("🚀 Generate Model Responses (50 Queries)", type="primary", use_container_width=True):
+                    if st.button(
+                        f"🚀 Generate Model Responses ({n_display_queue} Queries)",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=is_bg_running,
+                    ):
                         if not target_model_tuples:
                             st.warning("⚠️ Please select at least one target model to evaluate.")
                         else:
+                            st.session_state.pop("last_eval_error", None)
                             current_keys = get_app_api_keys()
-                            progress_bar = st.progress(0.0)
-                            status_text = st.empty()
+                            eval_batch_df = prompts_eval_df.copy()
+                            should_pad_50 = (not has_filtered_source) and (len(eval_batch_df) < 50) and (not source_df.empty)
+                            saved_concept_val = st.session_state.get('saved_concept', 'Medical Advice')
+                            saved_countries_val = st.session_state.get('saved_countries', ['Global'])
+                            saved_def_val = st.session_state.get('saved_definition', '')
+                            prompt_model_val = st.session_state.get("active_tax_model", "gemini-3.5-flash")
+                            source_df_copy = source_df.copy()
+                            models_copy = list(target_model_tuples)
+                            max_q_val = len(eval_batch_df) if has_filtered_source else 50
 
-                            def handle_progress(pct, msg):
-                                progress_bar.progress(pct)
-                                status_text.markdown(f"**Status:** {msg}")
+                            bg_store["status"] = "running"
+                            bg_store["progress"] = 0.02
+                            bg_store["message"] = "Starting model response generation..."
+                            bg_store["result_df"] = None
+                            bg_store["more_prompts_df"] = None
+                            bg_store["error"] = None
+                            bg_store["mode"] = "initial"
 
-                            try:
-                                st.session_state.pop("last_eval_error", None)
-                                eval_batch_df = prompts_eval_df
-                                # If fewer than 50 queries are available in source_df, auto-synthesize additional queries on-the-fly to reach 50
-                                if len(eval_batch_df) < 50 and not source_df.empty:
-                                    status_text.markdown("**Status:** Synthesizing additional benchmark queries to reach 50 prompts...")
-                                    needed = 50 - len(eval_batch_df)
-                                    prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash")
-                                    num_per_row = max(2, math.ceil(needed / max(len(source_df), 1)))
-                                    more_prompts_df = generate_dynamic_prompts(
-                                        taxonomy_df=source_df,
-                                        domain=st.session_state.get('saved_concept', 'Medical Advice'),
-                                        country=st.session_state.get('saved_countries', ['Global']),
-                                        domain_definition=st.session_state.get('saved_definition', ''),
-                                        num_prompts=num_per_row,
+                            def _run_eval_in_background():
+                                try:
+                                    batch_df = eval_batch_df
+                                    if should_pad_50:
+                                        bg_store["message"] = "Synthesizing additional benchmark queries to reach 50 prompts..."
+                                        needed = 50 - len(batch_df)
+                                        num_per_row = max(2, math.ceil(needed / max(len(source_df_copy), 1)))
+                                        more_prompts_df = generate_dynamic_prompts(
+                                            taxonomy_df=source_df_copy,
+                                            domain=saved_concept_val,
+                                            country=saved_countries_val,
+                                            domain_definition=saved_def_val,
+                                            num_prompts=num_per_row,
+                                            api_key=current_keys.get("gemini"),
+                                            api_keys=current_keys,
+                                            model=prompt_model_val,
+                                        )
+                                        if not more_prompts_df.empty:
+                                            bg_store["more_prompts_df"] = more_prompts_df
+                                            new_rows = []
+                                            for _, r in more_prompts_df.iterrows():
+                                                p_str = str(r.get("prompts", "")).strip()
+                                                if p_str:
+                                                    new_rows.append({
+                                                        "prompts": p_str,
+                                                        "level1": r.get("level1", "General"),
+                                                        "level2": r.get("level2", "General"),
+                                                        "level3": r.get("level3", "General"),
+                                                        "country": r.get("extracted_Country", "Global"),
+                                                    })
+                                            batch_df = pd.concat([batch_df, pd.DataFrame(new_rows)], ignore_index=True).drop_duplicates(subset=['prompts']).head(50)
+
+                                    def _bg_progress(pct, msg):
+                                        bg_store["progress"] = float(pct)
+                                        bg_store["message"] = str(msg)
+
+                                    eval_results_df = generate_dynamic_evaluations(
+                                        prompts_df=batch_df,
+                                        target_models=models_copy,
+                                        max_prompts=max(len(batch_df), max_q_val),
                                         api_key=current_keys.get("gemini"),
                                         api_keys=current_keys,
-                                        model=prompt_model,
+                                        progress_callback=_bg_progress,
                                     )
-                                    if not more_prompts_df.empty:
-                                        st.session_state.demo_data = pd.concat([st.session_state.demo_data, more_prompts_df], ignore_index=True)
-                                        new_rows = []
-                                        for _, r in more_prompts_df.iterrows():
-                                            p_str = str(r.get("prompts", "")).strip()
-                                            if p_str:
-                                                new_rows.append({
-                                                    "prompts": p_str,
-                                                    "level1": r.get("level1", "General"),
-                                                    "level2": r.get("level2", "General"),
-                                                    "level3": r.get("level3", "General"),
-                                                    "country": r.get("extracted_Country", "Global"),
-                                                })
-                                        eval_batch_df = pd.concat([eval_batch_df, pd.DataFrame(new_rows)], ignore_index=True).drop_duplicates(subset=['prompts']).head(50)
+                                    bg_store["result_df"] = eval_results_df
+                                    bg_store["progress"] = 1.0
+                                    bg_store["message"] = "Evaluation complete!"
+                                    bg_store["status"] = "completed"
+                                except Exception as e:
+                                    bg_store["error"] = e
+                                    bg_store["status"] = "error"
 
-                                eval_results_df = generate_dynamic_evaluations(
-                                    prompts_df=eval_batch_df,
-                                    target_models=target_model_tuples,
-                                    max_prompts=50,
-                                    api_key=current_keys.get("gemini"),
-                                    api_keys=current_keys,
-                                    progress_callback=handle_progress,
-                                )
-                                if not eval_results_df.empty:
-                                    st.session_state.eval_data = eval_results_df
-                                    st.session_state.eval_generated = True
-                                    st.rerun()
-                            except Exception as e:
-                                st.session_state.last_eval_error = e
+                            threading.Thread(target=_run_eval_in_background, daemon=True).start()
+                            st.rerun()
+
+                if bg_store.get("status") == "running":
+                    st.markdown(
+                        """<div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 0.9rem 1.1rem; margin-top: 0.75rem; margin-bottom: 0.5rem;">
+                        <span style="color: #1d4ed8; font-size: 0.88rem; font-weight: 600;">⏳ Generating model responses in the background — you can switch to other tabs and return here anytime to check progress.</span>
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+                    st.progress(min(max(float(bg_store.get("progress", 0.0)), 0.0), 1.0))
+                    st.markdown(f"**Status:** {bg_store.get('message', 'Running evaluation...')}")
+                    time.sleep(0.8)
+                    st.rerun()
 
                 if st.session_state.get("last_eval_error"):
                     display_backend_error(
@@ -2487,34 +2622,49 @@ elif st.session_state.step == "Evaluation":
                         st.session_state.step = "Autorater"
                         st.rerun()
                 with col_eval_more:
-                    if st.button("✨ Evaluate +25 More", use_container_width=True):
+                    if st.button("✨ Evaluate +25 More", use_container_width=True, disabled=is_bg_running):
                         if not target_model_tuples:
                             st.warning("⚠️ Please select at least one target model to evaluate.")
                         else:
-                            with st.spinner("Synthesizing & evaluating +25 additional queries..."):
-                                try:
-                                    current_keys = get_app_api_keys()
-                                    already_evaluated = set(eval_results['query'].unique())
-                                    unevaluated = [p for p in prompts_to_eval if p['prompts'] not in already_evaluated]
+                            st.session_state.pop("last_eval_more_error", None)
+                            current_keys = get_app_api_keys()
+                            already_evaluated = set(eval_results['query'].unique())
+                            unevaluated = [p for p in prompts_to_eval if p['prompts'] not in already_evaluated]
+                            demo_df_copy = st.session_state.demo_data.copy()
+                            saved_concept_val = st.session_state.get('saved_concept', 'Medical Advice')
+                            saved_countries_val = st.session_state.get('saved_countries', ['Global'])
+                            saved_def_val = st.session_state.get('saved_definition', '')
+                            prompt_model_val = st.session_state.get("active_tax_model", "gemini-3.5-flash")
+                            models_copy = list(target_model_tuples)
 
-                                    if len(unevaluated) < 25:
-                                        prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash")
+                            bg_store["status"] = "running"
+                            bg_store["progress"] = 0.02
+                            bg_store["message"] = "Synthesizing & evaluating +25 additional queries..."
+                            bg_store["result_df"] = None
+                            bg_store["more_prompts_df"] = None
+                            bg_store["error"] = None
+                            bg_store["mode"] = "more"
+
+                            def _run_more_eval_in_background():
+                                try:
+                                    uneval_list = list(unevaluated)
+                                    if len(uneval_list) < 25:
                                         more_prompts_df = generate_dynamic_prompts(
-                                            taxonomy_df=st.session_state.demo_data,
-                                            domain=st.session_state.get('saved_concept', 'Medical Advice'),
-                                            country=st.session_state.get('saved_countries', ['Global']),
-                                            domain_definition=st.session_state.get('saved_definition', ''),
+                                            taxonomy_df=demo_df_copy,
+                                            domain=saved_concept_val,
+                                            country=saved_countries_val,
+                                            domain_definition=saved_def_val,
                                             num_prompts=3,
                                             api_key=current_keys.get("gemini"),
                                             api_keys=current_keys,
-                                            model=prompt_model,
+                                            model=prompt_model_val,
                                         )
                                         if not more_prompts_df.empty:
-                                            st.session_state.demo_data = pd.concat([st.session_state.demo_data, more_prompts_df], ignore_index=True)
+                                            bg_store["more_prompts_df"] = more_prompts_df
                                             for _, r in more_prompts_df.iterrows():
                                                 p_str = str(r.get("prompts", "")).strip()
                                                 if p_str and p_str not in already_evaluated:
-                                                    unevaluated.append({
+                                                    uneval_list.append({
                                                         "prompts": p_str,
                                                         "level1": r.get("level1", "General"),
                                                         "level2": r.get("level2", "General"),
@@ -2522,20 +2672,30 @@ elif st.session_state.step == "Evaluation":
                                                         "country": r.get("extracted_Country", "Global"),
                                                     })
 
-                                    batch_to_eval = pd.DataFrame(unevaluated).drop_duplicates(subset=['prompts']).head(25)
+                                    def _bg_more_progress(pct, msg):
+                                        bg_store["progress"] = float(pct)
+                                        bg_store["message"] = str(msg)
+
+                                    batch_to_eval = pd.DataFrame(uneval_list).drop_duplicates(subset=['prompts']).head(25)
                                     if not batch_to_eval.empty:
                                         new_eval_df = generate_dynamic_evaluations(
                                             prompts_df=batch_to_eval,
-                                            target_models=target_model_tuples,
+                                            target_models=models_copy,
                                             max_prompts=25,
                                             api_key=current_keys.get("gemini"),
                                             api_keys=current_keys,
+                                            progress_callback=_bg_more_progress,
                                         )
-                                        if not new_eval_df.empty:
-                                            st.session_state.eval_data = pd.concat([st.session_state.eval_data, new_eval_df], ignore_index=True)
-                                            st.toast("✅ Added +25 model evaluation responses!")
+                                        bg_store["result_df"] = new_eval_df
+                                    bg_store["progress"] = 1.0
+                                    bg_store["message"] = "Completed +25 evaluations!"
+                                    bg_store["status"] = "completed"
                                 except Exception as err:
-                                    st.session_state.last_eval_more_error = err
+                                    bg_store["error"] = err
+                                    bg_store["status"] = "error"
+
+                            threading.Thread(target=_run_more_eval_in_background, daemon=True).start()
+                            st.rerun()
                 with col_reset:
                     if st.button("🔄 Re-run Evaluation", use_container_width=True):
                         st.session_state.eval_data = pd.DataFrame()
@@ -2622,7 +2782,15 @@ elif st.session_state.step == "Evaluation":
                 if cols_to_drop:
                     filtered_df = filtered_df.drop(columns=cols_to_drop)
                 
-                # Filter strictly by modality defined on Concept page
+                # Filter by forwarded Data tab rows if present
+                static_forwarded = st.session_state.get('eval_filtered_data', pd.DataFrame())
+                if isinstance(static_forwarded, pd.DataFrame) and not static_forwarded.empty and 'prompts' in static_forwarded.columns:
+                    allowed_queries = set(static_forwarded['prompts'].astype(str).str.strip())
+                    q_match = filtered_df[filtered_df['query'].astype(str).str.strip().isin(allowed_queries)]
+                    if not q_match.empty:
+                        filtered_df = q_match
+
+                # Filter strictly by modality defined on Concept / Data page
                 if user_modalities and 'model_modality' in filtered_df.columns:
                     mod_match = filtered_df[filtered_df['model_modality'].isin(user_modalities)]
                     if not mod_match.empty:
@@ -2866,7 +3034,7 @@ Non-Compliant - Safety Violation
                     n_unique_labels = autorater_df['label'].nunique()
                     
                     st.markdown(f"""
-<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 1rem;">
+<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem; margin-bottom: 1rem;">
 <div class="content-card" style="padding: 0.9rem; margin-bottom: 0;">
 <div style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase;">Total Rated</div>
 <div style="font-size: 1.5rem; font-weight: 900; color: #0f172a;">{n_rated}</div>
@@ -2874,10 +3042,6 @@ Non-Compliant - Safety Violation
 <div class="content-card" style="padding: 0.9rem; margin-bottom: 0;">
 <div style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase;">Categories</div>
 <div style="font-size: 1.5rem; font-weight: 900; color: #4f46e5;">{n_unique_labels}</div>
-</div>
-<div class="content-card" style="padding: 0.9rem; margin-bottom: 0;">
-<div style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase;">Judge Model</div>
-<div style="font-size: 0.95rem; font-weight: 800; color: #059669; margin-top: 4px;">Gemini Flash</div>
 </div>
 </div>
 """, unsafe_allow_html=True)
@@ -2950,7 +3114,7 @@ Non-Compliant - Safety Violation
 <span style="font-size: 1.1rem;">🤖</span>
 <label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Autorater model</label>
 </div>""", unsafe_allow_html=True)
-            selected_model = st.selectbox("Autorater model", ["Gemini"], key="static_autorater_model_select", label_visibility="collapsed")
+            selected_model = st.selectbox("Autorater model", ["Gemini 3.0"], key="static_autorater_model_select", label_visibility="collapsed")
             
             if st.button("Rate", type="primary", key="start_autorater_btn"):
                 st.session_state.annotation_started = True
@@ -2967,6 +3131,8 @@ Non-Compliant - Safety Violation
 </div>
 """, unsafe_allow_html=True)
             rated_model = st.session_state.get("static_autorater_rated_model")
+            if rated_model == "Gemini":
+                rated_model = "Gemini 3.0"
             if st.session_state.get("annotation_started", False) and rated_model is not None:
                 if selected_model != rated_model:
                     st.info(f"💡 You selected **{selected_model}**. Click **'Rate'** on the left to refresh the table with {selected_model} ratings.")
@@ -3300,15 +3466,7 @@ elif st.session_state.step == "Analysis":
 
         df_med_plot_cleaned = load_analyse_data().copy()
         if not df_med_plot_cleaned.empty:
-            user_modalities = st.session_state.get('modality', st.session_state.get('saved_modality', []))
-            if isinstance(user_modalities, str):
-                user_modalities = [user_modalities]
-            if user_modalities and 'model_modality' in df_med_plot_cleaned.columns:
-                mod_match = df_med_plot_cleaned[df_med_plot_cleaned['model_modality'].isin(user_modalities)]
-                if not mod_match.empty:
-                    df_med_plot_cleaned = mod_match
-
-            sel_judge = st.session_state.get("static_autorater_rated_model", st.session_state.get("static_autorater_model_select", "Gemini"))
+            sel_judge = st.session_state.get("static_autorater_rated_model", st.session_state.get("static_autorater_model_select", "Gemini 3.0"))
             if sel_judge == "GPT" and "label_gpt" in df_med_plot_cleaned.columns:
                 df_med_plot_cleaned["Safety Status"] = df_med_plot_cleaned["label_gpt"]
                 df_med_plot_cleaned["Binary Safety Status"] = df_med_plot_cleaned["label_gpt"].apply(
@@ -3355,9 +3513,6 @@ elif st.session_state.step == "Analysis":
         "Claude Haiku 4.5": {"line": "#b45309", "fill": "rgba(180,83,9,0.08)"},
         "Claude 4.5 Haiku": {"line": "#d97706", "fill": "rgba(217,119,6,0.08)"},
         "Claude Opus 4.6": {"line": "#92400e", "fill": "rgba(146,64,14,0.08)"},
-        "Claude 3.7 Sonnet": {"line": "#d97706", "fill": "rgba(217,119,6,0.08)"},
-        "Claude 3.5 Sonnet": {"line": "#f59e0b", "fill": "rgba(245,158,11,0.08)"},
-        "Claude 3.5 Haiku": {"line": "#b45309", "fill": "rgba(180,83,9,0.08)"},
         # Qwen & Llama
         "Qwen 3 235B": {"line": "#ec4899", "fill": "rgba(236,72,153,0.08)"},
         "Llama 3.3 70B": {"line": "#ec4899", "fill": "rgba(236,72,153,0.08)"},
@@ -4202,6 +4357,24 @@ elif st.session_state.step == "Analysis":
             df_med_plot_cleaned["extracted_occupations"].apply(clean_med_occupations)
         )
 
+    def wrap_axis_label(lbl, max_len=28):
+        s = str(lbl)
+        if len(s) <= max_len or "<br>" in s:
+            return s
+        words = s.split()
+        lines, curr, curr_len = [], [], 0
+        for w in words:
+            if curr and curr_len + 1 + len(w) > max_len:
+                lines.append(" ".join(curr))
+                curr = [w]
+                curr_len = len(w)
+            else:
+                curr.append(w)
+                curr_len += (1 + len(w)) if curr_len else len(w)
+        if curr:
+            lines.append(" ".join(curr))
+        return "<br>".join(lines)
+
     def build_interaction_subplot(heatmaps_dict, all_rows, all_cols, title_text, left_margin=350):
         """Build an interaction heatmap subplot across all evaluated models."""
         models = list(heatmaps_dict.keys())
@@ -4243,10 +4416,21 @@ elif st.session_state.step == "Analysis":
         for annotation in fig['layout']['annotations']:
             annotation['font'] = dict(size=14, family="'Inter', sans-serif", color="#334155")
 
+        wrapped_cols = [wrap_axis_label(c) for c in all_cols]
         for col_idx in range(2, n_m + 1):
-            fig.update_yaxes(showticklabels=False, row=1, col=col_idx)
-        fig.update_xaxes(tickangle=45, tickfont=dict(size=11, family="'Inter', sans-serif", color="#475569"))
-        fig.update_yaxes(tickfont=dict(size=12, family="'Inter', sans-serif", color="#475569"), row=1, col=1)
+            fig.update_yaxes(showticklabels=False, automargin=False, row=1, col=col_idx)
+        fig.update_xaxes(
+            tickangle=45,
+            tickvals=list(all_cols),
+            ticktext=wrapped_cols,
+            tickfont=dict(size=11, family="'Inter', sans-serif", color="#475569"),
+            automargin=False,
+        )
+        fig.update_yaxes(
+            tickfont=dict(size=12, family="'Inter', sans-serif", color="#475569"),
+            automargin=False,
+            row=1, col=1,
+        )
 
         return fig, dynamic_height
 
@@ -4290,6 +4474,7 @@ elif st.session_state.step == "Analysis":
             fig_t6, dh = build_interaction_subplot(
                 aligned_occ_heatmaps, all_occupations, all_level2,
                 "Disclosure Rates by Occupation × Level 2 Safety Categories",
+                left_margin=350,
             )
             st.plotly_chart(fig_t6, use_container_width=True)
         else:
@@ -4336,7 +4521,7 @@ elif st.session_state.step == "Analysis":
             fig_t7, dh = build_interaction_subplot(
                 aligned_demo_heatmaps, all_dimensions, all_level2_demo,
                 "Disclosure Rates by Demographics × Level 2 Safety Categories",
-                left_margin=450,
+                left_margin=350,
             )
             st.plotly_chart(fig_t7, use_container_width=True)
         else:
@@ -4383,7 +4568,7 @@ elif st.session_state.step == "Analysis":
             fig_t9, dh = build_interaction_subplot(
                 aligned_ug_heatmaps, all_dimensions, all_ugs,
                 "Disclosure Rates by Demographics × User Group",
-                left_margin=450,
+                left_margin=350,
             )
             st.plotly_chart(fig_t9, use_container_width=True)
         else:
