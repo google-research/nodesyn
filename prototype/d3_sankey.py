@@ -17,12 +17,15 @@ def create_d3_sankey_html(df_final, height=700, scale_factor=1.0):
     df_temp = df_final.loc[:, ~df_final.columns.duplicated()].copy()
 
     def safe_eval_list(x):
+        vals = x
         if isinstance(x, str) and x.strip().startswith('['):
             try:
-                return eval(x)
+                vals = eval(x)
             except Exception:
-                return [x]
-        return x if isinstance(x, list) else [x]
+                vals = [x]
+        elif not isinstance(x, list):
+            vals = [x]
+        return list(dict.fromkeys(str(v).strip() for v in vals if str(v).strip()))
 
     for col in ['level3', 'extracted_Country', 'user_group']:
         if col in df_temp.columns:
@@ -50,8 +53,8 @@ def create_d3_sankey_html(df_final, height=700, scale_factor=1.0):
             series_col = series_col.iloc[:, 0]
         df_exploded[col] = series_col.astype(str).str.replace('-', '', regex=False).str.strip()
         df_exploded[col] = df_exploded[col].replace({
-            'UK': 'United Kingdom', 'USA': 'United States',
-            'US': 'United States', 'America': 'United States'
+            'UK': 'United Kingdom', 'United States': 'USA',
+            'United States of America': 'USA', 'US': 'USA', 'America': 'USA'
         })
 
     # Filter config

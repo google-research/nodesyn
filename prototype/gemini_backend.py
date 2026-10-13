@@ -794,7 +794,7 @@ class KeywordsGenerator:
         domain_definition: str,
     ) -> str:
         if country in ["ALL", "Global", "", "All"] or not country:
-            country_inst = '6. "country": Specific representative country/region most saliently affected by or culturally relevant to this topic (e.g. "United States", "India", "United Kingdom", "Nigeria", "Germany", "Brazil", "Japan", "South Africa", "Canada", "Australia", etc.).'
+            country_inst = '6. "country": Specific representative country/region most saliently affected by or contextually relevant to this topic (e.g. "United States", "India", "United Kingdom", "Nigeria", "Germany", "Brazil", "Japan", "South Africa", "Canada", "Australia", etc.).'
         elif isinstance(country, list) and len(country) > 1:
             country_inst = f'6. "country": Choose the single most applicable country from this list: {country}.'
         else:
