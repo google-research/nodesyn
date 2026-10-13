@@ -23,6 +23,7 @@ import gemini_backend
 importlib.reload(gemini_backend)
 from gemini_backend import (
     GeminiBackendError,
+    GenerationCancelledError,
     parse_backend_error,
     generate_dynamic_taxonomy,
     generate_dynamic_prompts,
@@ -854,16 +855,50 @@ def create_sankey_visualization(df_final):
 
 
 @st.cache_resource
+def get_cancel_registry() -> dict[str, threading.Event]:
+    return {}
+
+
+def create_task_cancel_event(task_name: str) -> threading.Event:
+    reg = get_cancel_registry()
+    old_ev = reg.get(task_name)
+    if old_ev is not None:
+        old_ev.set()
+    ev = threading.Event()
+    reg[task_name] = ev
+    return ev
+
+
+def stop_generation_task(task_name: str, notice_key: str, notice_msg: str):
+    reg = get_cancel_registry()
+    ev = reg.get(task_name)
+    if ev is not None:
+        ev.set()
+    st.session_state[notice_key] = notice_msg
+
+
+@st.cache_resource
 def get_bg_eval_store() -> dict[str, Any]:
     return {
-        "status": "idle",  # "idle" | "running" | "completed" | "error"
+        "status": "idle",  # "idle" | "running" | "completed" | "error" | "stopped"
         "progress": 0.0,
         "message": "",
         "result_df": None,
         "more_prompts_df": None,
         "error": None,
         "mode": "initial",  # "initial" | "more"
+        "cancel_event": threading.Event(),
     }
+
+
+def stop_bg_evaluation():
+    bg_store = get_bg_eval_store()
+    ev = bg_store.get("cancel_event")
+    if ev is not None:
+        ev.set()
+    bg_store["status"] = "stopped"
+    bg_store["message"] = "Evaluation stopped by user."
+    st.session_state["stop_notice_eval"] = "⏹️ Model evaluation was stopped by user."
 
 
 def sync_bg_eval_state():
@@ -886,9 +921,16 @@ def sync_bg_eval_state():
         bg_store["result_df"] = None
         bg_store["more_prompts_df"] = None
         bg_store["status"] = "idle"
+    elif bg_store["status"] == "stopped":
+        bg_store["result_df"] = None
+        bg_store["more_prompts_df"] = None
+        bg_store["error"] = None
+        bg_store["status"] = "idle"
     elif bg_store["status"] == "error":
         err = bg_store.get("error")
-        if bg_store.get("mode") == "more":
+        if isinstance(err, GenerationCancelledError):
+            st.session_state["stop_notice_eval"] = "⏹️ Model evaluation was stopped by user."
+        elif bg_store.get("mode") == "more":
             st.session_state.last_eval_more_error = err
         else:
             st.session_state.last_eval_error = err
@@ -943,6 +985,12 @@ with st.sidebar:
         if bg_store.get("status") == "running":
             pct_int = int(bg_store.get("progress", 0.0) * 100)
             st.info(f"⏳ Background Evaluation Running ({pct_int}%): {bg_store.get('message', 'Generating responses...')}")
+            st.button(
+                "⏹️ Stop Evaluation",
+                key="sidebar_stop_bg_eval_btn",
+                on_click=stop_bg_evaluation,
+                use_container_width=True,
+            )
         else:
             st.info("⚡ Dynamic Mode: Live Gemini API generation.")
     elif st.session_state.get('data_mode') == 'static':
@@ -1189,7 +1237,7 @@ elif st.session_state.step == "Concept":
     
     # Presets for domain definitions
     CONCEPT_DEFINITIONS = {
-        "Custom Domain": "Comprehensive policy and domain guidelines defining sensitive categories and topics.",
+        "Custom Domain": "",
         "Medical Advice": "Patient specific health assessment focusing on nuanced guidance and symptom interpretation.",
         "Example: Medical Advice": "Patient specific health assessment focusing on nuanced guidance and symptom interpretation.",
         "Public Health and Safety": "Policies, healthcare access, sanitation standards, disease outbreak response, and public health community measures.",
@@ -1222,11 +1270,18 @@ elif st.session_state.step == "Concept":
                     label_visibility="collapsed"
                 )
                 is_custom_domain = (selected_concept == "Custom Domain")
+                if is_custom_domain:
+                    st.markdown(
+                        '<div style="font-size: 0.82rem; font-weight: 700; color: #4f46e5; margin-top: 0.35rem; margin-bottom: 0.25rem;">✏️ Enter Your Custom Domain Name (Required):</div>',
+                        unsafe_allow_html=True,
+                    )
                 custom_domain_val = st.text_input(
-                    "Enter Custom Domain Name",
-                    value=st.session_state.get("custom_domain", "AI Safety Policy"),
+                    "Enter Your Custom Domain Name",
+                    value=st.session_state.get("custom_domain", ""),
+                    placeholder="👉 Type your custom domain here (e.g., Financial Advice, Legal Guidance, Cybersecurity)...",
                     key="custom_domain",
                     disabled=not is_custom_domain,
+                    label_visibility="collapsed" if is_custom_domain else "visible",
                 )
                 if is_custom_domain:
                     st.session_state.target_concept = custom_domain_val.strip() if custom_domain_val.strip() else "Custom Domain"
@@ -1293,7 +1348,13 @@ elif st.session_state.step == "Concept":
                 st.session_state.description = default_def
                 st.session_state._last_concept = active_concept_key
                 
-            st.text_area("Domain Definition & Scope", key="description", height=130, label_visibility="collapsed")
+            st.text_area(
+                "Domain Definition & Scope",
+                key="description",
+                height=130,
+                placeholder="👉 Enter the definition, scope, and safety guidelines for your custom domain here...",
+                label_visibility="collapsed",
+            )
 
             st.markdown("""<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; margin-bottom: 0.5rem;">
 <span style="font-size: 1.1rem;">🔄</span>
@@ -1365,10 +1426,15 @@ elif st.session_state.step == "Concept":
                     st.rerun()
         else:
             model_short_name = selected_tax_label.split('(')[0].strip()
+            if st.session_state.get("stop_notice_taxonomy"):
+                st.info(st.session_state.pop("stop_notice_taxonomy"))
+
             if st.button(f"🚀 Generate Dynamic Taxonomy ({model_short_name})", type="primary"):
                 current_api_keys = get_app_api_keys()
                 chosen_provider = get_model_provider(selected_tax_model)
-                if chosen_provider not in current_api_keys or not current_api_keys[chosen_provider]:
+                if is_custom_domain and not custom_domain_val.strip():
+                    st.warning("⚠️ Please enter your Custom Domain name in the input box above before generating the taxonomy.")
+                elif chosen_provider not in current_api_keys or not current_api_keys[chosen_provider]:
                     p_name = PROVIDER_DISPLAY_NAMES.get(chosen_provider, chosen_provider)
                     st.error(f"⚠️ Missing API key for {p_name}. Please configure it when launching via `./run.sh` or set the environment variable.")
                 else:
@@ -1376,19 +1442,32 @@ elif st.session_state.step == "Concept":
                     domain = st.session_state.target_concept
                     country_val = st.session_state.target_countries if st.session_state.target_countries else "Global"
                     lang_code = st.session_state.get("language_code", "en")
-                    dom_def = st.session_state.get("description", "")
+                    dom_def = st.session_state.get("description", "").strip() or "Comprehensive policy and domain guidelines defining sensitive categories and topics."
                     u_case = st.session_state.get("use_case", "Advice seeking")
                     modal_val = list(st.session_state.get("modality", ["text-to-image", "text-to-video", "text-to-text"]))
 
                     st.session_state.saved_concept = domain
                     st.session_state.saved_countries = st.session_state.target_countries
+                    st.session_state.saved_definition = dom_def
                     st.session_state.saved_modality = modal_val
                     st.session_state.active_tax_model = selected_tax_model
                     st.session_state.pop("eval_filtered_data", None)
                     st.session_state.pop("eval_filtered_modalities", None)
 
-                    progress_bar = st.progress(0.0)
-                    status_text = st.empty()
+                    col_prog, col_stop = st.columns([4, 1.2])
+                    with col_prog:
+                        progress_bar = st.progress(0.0)
+                        status_text = st.empty()
+                    with col_stop:
+                        st.button(
+                            "⏹️ Stop Generation",
+                            key="stop_tax_gen_btn",
+                            on_click=stop_generation_task,
+                            args=("taxonomy", "stop_notice_taxonomy", "⏹️ Taxonomy generation was stopped by user."),
+                            use_container_width=True,
+                        )
+                    heartbeat_slot = st.empty()
+                    cancel_ev = create_task_cancel_event("taxonomy")
 
                     def handle_progress(pct, msg):
                         progress_bar.progress(pct)
@@ -1408,6 +1487,8 @@ elif st.session_state.step == "Concept":
                                 api_keys=current_api_keys,
                                 model=selected_tax_model,
                                 progress_callback=handle_progress,
+                                cancel_event=cancel_ev,
+                                heartbeat_callback=lambda: heartbeat_slot.empty(),
                             )
                             st.session_state.demo_data = df_dyn
                             st.session_state.highest_step = max(st.session_state.highest_step, 3)
@@ -1415,6 +1496,9 @@ elif st.session_state.step == "Concept":
                             if hasattr(df_dyn, "attrs") and "grounding_error" in df_dyn.attrs:
                                 st.session_state.grounding_warning = df_dyn.attrs["grounding_error"]
                             st.rerun()
+                    except GenerationCancelledError:
+                        st.session_state["stop_notice_taxonomy"] = "⏹️ Taxonomy generation was stopped by user."
+                        st.rerun()
                     except Exception as err:
                         st.session_state.last_taxonomy_error = err
 
@@ -1724,10 +1808,21 @@ elif st.session_state.step == "Taxonomy":
                              and not st.session_state.get("last_node_citation_error")
                              and not st.session_state.get(f"attempted_fetch_{curr_l1}_{curr_l2}_{curr_l3}")
                          )
+                         if st.session_state.get("stop_notice_citation"):
+                             st.info(st.session_state.pop("stop_notice_citation"))
+
                          if needs_cite_fetch:
                              current_keys = get_app_api_keys()
                              if current_keys:
                                  st.session_state[f"attempted_fetch_{curr_l1}_{curr_l2}_{curr_l3}"] = True
+                                 st.button(
+                                     "⏹️ Stop Citation Search",
+                                     key=f"stop_auto_cite_{curr_l1}_{curr_l2}_{curr_l3}",
+                                     on_click=stop_generation_task,
+                                     args=("citation", "stop_notice_citation", "⏹️ Citation search grounding was stopped by user."),
+                                 )
+                                 heartbeat_cite_auto = st.empty()
+                                 cancel_cite_ev = create_task_cancel_event("citation")
                                  with st.spinner("Fetching research citation directly with search grounding..."):
                                      try:
                                          st.session_state.pop("last_node_citation_error", None)
@@ -1741,6 +1836,8 @@ elif st.session_state.step == "Taxonomy":
                                              api_key=current_keys.get("gemini"),
                                              api_keys=current_keys,
                                              model=grounding_model,
+                                             cancel_event=cancel_cite_ev,
+                                             heartbeat_callback=lambda: heartbeat_cite_auto.empty(),
                                          )
                                          if 'demo_data' in st.session_state and not st.session_state.demo_data.empty:
                                              df_up = st.session_state.demo_data.copy()
@@ -1767,6 +1864,9 @@ elif st.session_state.step == "Taxonomy":
                                                                   df_up.at[r_i, 'user_group'] = demo
                                              st.session_state.demo_data = df_up
                                              st.rerun()
+                                     except GenerationCancelledError:
+                                         st.session_state["stop_notice_citation"] = "⏹️ Citation search grounding was stopped by user."
+                                         st.rerun()
                                      except Exception as c_err:
                                          st.session_state.last_node_citation_error = c_err
 
@@ -1795,6 +1895,14 @@ elif st.session_state.step == "Taxonomy":
                                  current_keys = get_app_api_keys()
                                  active_tax = st.session_state.get("active_tax_model", "")
                                  grounding_model = active_tax
+                                 st.button(
+                                     "⏹️ Stop Citation Search",
+                                     key=f"stop_manual_cite_{curr_l1}_{curr_l2}_{curr_l3}",
+                                     on_click=stop_generation_task,
+                                     args=("citation", "stop_notice_citation", "⏹️ Citation search grounding was stopped by user."),
+                                 )
+                                 heartbeat_cite_manual = st.empty()
+                                 cancel_cite_ev = create_task_cancel_event("citation")
                                  with st.spinner(f"Fetching research citation using {grounding_model} with Google Search..."):
                                      try:
                                          st.session_state.pop("last_node_citation_error", None)
@@ -1806,6 +1914,8 @@ elif st.session_state.step == "Taxonomy":
                                              api_key=current_keys.get("gemini"),
                                              api_keys=current_keys,
                                              model=grounding_model,
+                                             cancel_event=cancel_cite_ev,
+                                             heartbeat_callback=lambda: heartbeat_cite_manual.empty(),
                                          )
                                          if 'demo_data' in st.session_state and not st.session_state.demo_data.empty:
                                              df_up = st.session_state.demo_data.copy()
@@ -1832,6 +1942,9 @@ elif st.session_state.step == "Taxonomy":
                                                                  df_up.at[r_i, 'user_group'] = demo
                                              st.session_state.demo_data = df_up
                                              st.rerun()
+                                     except GenerationCancelledError:
+                                         st.session_state["stop_notice_citation"] = "⏹️ Citation search grounding was stopped by user."
+                                         st.rerun()
                                      except Exception as c_err:
                                          st.session_state.last_node_citation_error = c_err
                                          st.rerun()
@@ -2299,6 +2412,8 @@ elif st.session_state.step == "Data":
     n_forwarded_rows = len(forwarded_eval_df)
     st.write("")
     if is_dynamic:
+        if st.session_state.get("stop_notice_prompts"):
+            st.info(st.session_state.pop("stop_notice_prompts"))
         col_next, col_gen_more, col_new_concept, col_home = st.columns([1.8, 1.2, 1, 1])
         with col_next:
             if st.button(f"Next: Setup Evaluation ({n_forwarded_rows} Filtered Rows) ➔", type="primary", use_container_width=True, key="dynamic_next_eval_btn"):
@@ -2312,6 +2427,15 @@ elif st.session_state.step == "Data":
                 st.rerun()
         with col_gen_more:
             if st.button("✨ +10 More Prompts", use_container_width=True):
+                st.button(
+                    "⏹️ Stop Prompt Generation",
+                    key="stop_more_prompts_btn",
+                    on_click=stop_generation_task,
+                    args=("more_prompts", "stop_notice_prompts", "⏹️ Additional prompt generation was stopped by user."),
+                    use_container_width=True,
+                )
+                heartbeat_prompts_slot = st.empty()
+                cancel_prompts_ev = create_task_cancel_event("more_prompts")
                 with st.spinner("Synthesizing additional grounded prompts in parallel..."):
                     try:
                         st.session_state.pop("last_prompt_error", None)
@@ -2327,11 +2451,16 @@ elif st.session_state.step == "Data":
                             api_keys=current_keys,
                             model=prompt_model,
                             modality=user_modalities,
+                            cancel_event=cancel_prompts_ev,
+                            heartbeat_callback=lambda: heartbeat_prompts_slot.empty(),
                         )
                         if not new_prompts_df.empty:
                             st.session_state.demo_data = pd.concat([st.session_state.demo_data, new_prompts_df], ignore_index=True)
                             st.toast("✅ Added new synthetic evaluation prompts!")
                             st.rerun()
+                    except GenerationCancelledError:
+                        st.session_state["stop_notice_prompts"] = "⏹️ Additional prompt generation was stopped by user."
+                        st.rerun()
                     except Exception as e:
                         st.session_state.last_prompt_error = e
         with col_new_concept:
@@ -2491,6 +2620,9 @@ elif st.session_state.step == "Evaluation":
                 bg_store = get_bg_eval_store()
                 is_bg_running = (bg_store.get("status") == "running")
 
+                if st.session_state.get("stop_notice_eval"):
+                    st.info(st.session_state.pop("stop_notice_eval"))
+
                 st.write("")
                 col_gen, _ = st.columns([1.6, 3])
                 with col_gen:
@@ -2515,6 +2647,8 @@ elif st.session_state.step == "Evaluation":
                             models_copy = list(target_model_tuples)
                             max_q_val = len(eval_batch_df) if has_filtered_source else 50
 
+                            bg_cancel_ev = threading.Event()
+                            bg_store["cancel_event"] = bg_cancel_ev
                             bg_store["status"] = "running"
                             bg_store["progress"] = 0.02
                             bg_store["message"] = "Starting model response generation..."
@@ -2539,6 +2673,7 @@ elif st.session_state.step == "Evaluation":
                                             api_key=current_keys.get("gemini"),
                                             api_keys=current_keys,
                                             model=prompt_model_val,
+                                            cancel_event=bg_cancel_ev,
                                         )
                                         if not more_prompts_df.empty:
                                             bg_store["more_prompts_df"] = more_prompts_df
@@ -2566,14 +2701,23 @@ elif st.session_state.step == "Evaluation":
                                         api_key=current_keys.get("gemini"),
                                         api_keys=current_keys,
                                         progress_callback=_bg_progress,
+                                        cancel_event=bg_cancel_ev,
                                     )
+                                    if bg_cancel_ev.is_set() or bg_store.get("status") == "stopped":
+                                        bg_store["status"] = "stopped"
+                                        return
                                     bg_store["result_df"] = eval_results_df
                                     bg_store["progress"] = 1.0
                                     bg_store["message"] = "Evaluation complete!"
                                     bg_store["status"] = "completed"
+                                except GenerationCancelledError:
+                                    bg_store["status"] = "stopped"
                                 except Exception as e:
-                                    bg_store["error"] = e
-                                    bg_store["status"] = "error"
+                                    if bg_cancel_ev.is_set() or bg_store.get("status") == "stopped":
+                                        bg_store["status"] = "stopped"
+                                    else:
+                                        bg_store["error"] = e
+                                        bg_store["status"] = "error"
 
                             threading.Thread(target=_run_eval_in_background, daemon=True).start()
                             st.rerun()
@@ -2581,12 +2725,21 @@ elif st.session_state.step == "Evaluation":
                 if bg_store.get("status") == "running":
                     st.markdown(
                         """<div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 0.9rem 1.1rem; margin-top: 0.75rem; margin-bottom: 0.5rem;">
-                        <span style="color: #1d4ed8; font-size: 0.88rem; font-weight: 600;">⏳ Generating model responses in the background — you can switch to other tabs and return here anytime to check progress.</span>
+                        <span style="color: #1d4ed8; font-size: 0.88rem; font-weight: 600;">⏳ Generating model responses in the background — you can switch to other tabs and return here anytime to check progress, or click Stop below.</span>
                         </div>""",
                         unsafe_allow_html=True,
                     )
-                    st.progress(min(max(float(bg_store.get("progress", 0.0)), 0.0), 1.0))
-                    st.markdown(f"**Status:** {bg_store.get('message', 'Running evaluation...')}")
+                    col_eval_prog, col_eval_stop = st.columns([4, 1.2])
+                    with col_eval_prog:
+                        st.progress(min(max(float(bg_store.get("progress", 0.0)), 0.0), 1.0))
+                        st.markdown(f"**Status:** {bg_store.get('message', 'Running evaluation...')}")
+                    with col_eval_stop:
+                        st.button(
+                            "⏹️ Stop Evaluation",
+                            key="stop_bg_eval_btn",
+                            on_click=stop_bg_evaluation,
+                            use_container_width=True,
+                        )
                     time.sleep(0.8)
                     st.rerun()
 
@@ -2696,6 +2849,8 @@ elif st.session_state.step == "Evaluation":
                             prompt_model_val = st.session_state.get("active_tax_model", "gemini-3.5-flash")
                             models_copy = list(target_model_tuples)
 
+                            bg_cancel_ev = threading.Event()
+                            bg_store["cancel_event"] = bg_cancel_ev
                             bg_store["status"] = "running"
                             bg_store["progress"] = 0.02
                             bg_store["message"] = "Synthesizing & evaluating +25 additional queries..."
@@ -2717,6 +2872,7 @@ elif st.session_state.step == "Evaluation":
                                             api_key=current_keys.get("gemini"),
                                             api_keys=current_keys,
                                             model=prompt_model_val,
+                                            cancel_event=bg_cancel_ev,
                                         )
                                         if not more_prompts_df.empty:
                                             bg_store["more_prompts_df"] = more_prompts_df
@@ -2744,14 +2900,23 @@ elif st.session_state.step == "Evaluation":
                                             api_key=current_keys.get("gemini"),
                                             api_keys=current_keys,
                                             progress_callback=_bg_more_progress,
+                                            cancel_event=bg_cancel_ev,
                                         )
                                         bg_store["result_df"] = new_eval_df
+                                    if bg_cancel_ev.is_set() or bg_store.get("status") == "stopped":
+                                        bg_store["status"] = "stopped"
+                                        return
                                     bg_store["progress"] = 1.0
                                     bg_store["message"] = "Completed +25 evaluations!"
                                     bg_store["status"] = "completed"
+                                except GenerationCancelledError:
+                                    bg_store["status"] = "stopped"
                                 except Exception as err:
-                                    bg_store["error"] = err
-                                    bg_store["status"] = "error"
+                                    if bg_cancel_ev.is_set() or bg_store.get("status") == "stopped":
+                                        bg_store["status"] = "stopped"
+                                    else:
+                                        bg_store["error"] = err
+                                        bg_store["status"] = "error"
 
                             threading.Thread(target=_run_more_eval_in_background, daemon=True).start()
                             st.rerun()
@@ -3052,10 +3217,25 @@ Violation - Safety Issue
 
                 n_eval_rows = len(eval_data_source)
                 st.write("")
+                if st.session_state.get("stop_notice_autorater"):
+                    st.info(st.session_state.pop("stop_notice_autorater"))
+
                 if st.button(f"🚀 Run Autorater ({n_eval_rows} Responses)", type="primary", use_container_width=True, key="dynamic_rate_btn"):
                     current_keys = get_app_api_keys()
-                    progress_bar = st.progress(0.0)
-                    status_text = st.empty()
+                    col_ar_prog, col_ar_stop = st.columns([3.5, 1.3])
+                    with col_ar_prog:
+                        progress_bar = st.progress(0.0)
+                        status_text = st.empty()
+                    with col_ar_stop:
+                        st.button(
+                            "⏹️ Stop Autorater",
+                            key="stop_autorater_btn",
+                            on_click=stop_generation_task,
+                            args=("autorater", "stop_notice_autorater", "⏹️ Autorater execution was stopped by user."),
+                            use_container_width=True,
+                        )
+                    heartbeat_ar_slot = st.empty()
+                    cancel_ar_ev = create_task_cancel_event("autorater")
 
                     def handle_progress(pct, msg):
                         progress_bar.progress(pct)
@@ -3071,12 +3251,17 @@ Violation - Safety Issue
                             api_key=current_keys.get("gemini"),
                             api_keys=current_keys,
                             progress_callback=handle_progress,
+                            cancel_event=cancel_ar_ev,
+                            heartbeat_callback=lambda: heartbeat_ar_slot.empty(),
                         )
                         if not rated_results.empty:
                             st.session_state.autorater_data = rated_results
                             st.session_state.annotation_started = True
                             st.toast(f"✅ Autorater completed for all {len(rated_results)} responses!")
                             st.rerun()
+                    except GenerationCancelledError:
+                        st.session_state["stop_notice_autorater"] = "⏹️ Autorater execution was stopped by user."
+                        st.rerun()
                     except Exception as err:
                         st.session_state.last_autorater_error = err
 

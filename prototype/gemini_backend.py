@@ -408,6 +408,10 @@ class GenerateContentResult:
         self.error = error
 
 
+class GenerationCancelledError(Exception):
+    """Raised when the user stops an in-progress dynamic generation task."""
+
+
 class MultiModelUtils:
     """Unified client for interacting with Gemini, OpenAI, Anthropic, and Llama APIs with parallel batching."""
 
@@ -415,12 +419,16 @@ class MultiModelUtils:
         self,
         api_key: str | None = None,
         api_keys: dict[str, str] | None = None,
+        cancel_event: Any = None,
+        heartbeat_callback: Any = None,
     ):
         self._api_keys = dict(get_configured_api_keys())
         if api_keys:
             self._api_keys.update({k: v for k, v in api_keys.items() if v})
         if api_key:
             self._api_keys["gemini"] = api_key
+        self._cancel_event = cancel_event
+        self._heartbeat_callback = heartbeat_callback
 
         self._gemini_client = None
         self._openai_client = None
@@ -548,14 +556,15 @@ class MultiModelUtils:
         text = resp.choices[0].message.content or ""
         return text, resp
 
-    def generate_content(
+    def _execute_single_call(
         self,
         request: GenerateContentRequest,
         model: str = "gemini-3.5-flash",
         tools: list[dict[str, Any] | types.Tool] | None = None,
         raise_for_status: bool = False,
     ) -> GenerateContentResult:
-        """Calls appropriate model provider with fail-fast execution (no retry delays)."""
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            raise GenerationCancelledError("Generation stopped by user.")
         provider = self.get_model_provider(model)
         try:
             if provider == "openai":
@@ -574,11 +583,44 @@ class MultiModelUtils:
             ):
                 return GenerateContentResult(request, text, resp)
             return GenerateContentResult(request, text, resp)
+        except GenerationCancelledError:
+            raise
         except Exception as e:
             logging.warning("Call to model [%s] failed: %s", model, str(e))
             if raise_for_status:
                 raise GeminiBackendError(e, model=model, provider=provider)
             return GenerateContentResult(request, "", error=str(e))
+
+    def generate_content(
+        self,
+        request: GenerateContentRequest,
+        model: str = "gemini-3.5-flash",
+        tools: list[dict[str, Any] | types.Tool] | None = None,
+        raise_for_status: bool = False,
+        _in_batch: bool = False,
+    ) -> GenerateContentResult:
+        """Calls appropriate model provider with fail-fast execution and responsive cancellation."""
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            raise GenerationCancelledError("Generation stopped by user.")
+
+        if not _in_batch and (self._cancel_event is not None or self._heartbeat_callback is not None):
+            executor = futures.ThreadPoolExecutor(max_workers=1)
+            try:
+                future = executor.submit(
+                    self._execute_single_call, request, model, tools, raise_for_status
+                )
+                while not future.done():
+                    futures.wait([future], timeout=0.3)
+                    if self._cancel_event is not None and self._cancel_event.is_set():
+                        future.cancel()
+                        raise GenerationCancelledError("Generation stopped by user.")
+                    if self._heartbeat_callback is not None:
+                        self._heartbeat_callback()
+                return future.result()
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
+
+        return self._execute_single_call(request, model, tools, raise_for_status)
 
     def generate_content_batch(
         self,
@@ -588,35 +630,50 @@ class MultiModelUtils:
         max_workers: int = 5,
         raise_for_status: bool = True,
     ) -> list[GenerateContentResult]:
-        """Calls model generate_content in parallel across workers with fail-fast semantics."""
+        """Calls model generate_content in parallel across workers with fail-fast and cancellation semantics."""
         if not requests:
             return []
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            raise GenerationCancelledError("Generation stopped by user.")
+
         results: list[GenerateContentResult] = []
-        with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor = futures.ThreadPoolExecutor(max_workers=max_workers)
+        try:
             tasks_futures = {}
             for item in requests:
-                tasks_futures[executor.submit(self.generate_content, item, model, tools, False)] = item
+                tasks_futures[executor.submit(self.generate_content, item, model, tools, False, True)] = item
 
-            for future in futures.as_completed(tasks_futures):
-                req = tasks_futures[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                    if raise_for_status and getattr(result, "error", None):
-                        # Fail fast: cancel all remaining pending tasks immediately
-                        for f in tasks_futures:
-                            f.cancel()
-                        logging.error("Fail-fast triggered in batch for model %s: %s", model, result.error)
-                        raise GeminiBackendError(result.error, model=model)
-                except GeminiBackendError:
-                    raise
-                except Exception as e:
-                    logging.error("Batch request failed for model %s: %s", model, str(e))
-                    if raise_for_status:
-                        for f in tasks_futures:
-                            f.cancel()
-                        raise GeminiBackendError(e, model=model)
-                    results.append(GenerateContentResult(req, "", error=str(e)))
+            pending = set(tasks_futures.keys())
+            while pending:
+                done, pending = futures.wait(pending, timeout=0.3, return_when=futures.FIRST_COMPLETED)
+                if self._cancel_event is not None and self._cancel_event.is_set():
+                    for f in tasks_futures:
+                        f.cancel()
+                    raise GenerationCancelledError("Generation stopped by user.")
+                if self._heartbeat_callback is not None:
+                    self._heartbeat_callback()
+
+                for future in done:
+                    req = tasks_futures[future]
+                    try:
+                        result = future.result()
+                        results.append(result)
+                        if raise_for_status and getattr(result, "error", None):
+                            for f in tasks_futures:
+                                f.cancel()
+                            logging.error("Fail-fast triggered in batch for model %s: %s", model, result.error)
+                            raise GeminiBackendError(result.error, model=model)
+                    except (GeminiBackendError, GenerationCancelledError):
+                        raise
+                    except Exception as e:
+                        logging.error("Batch request failed for model %s: %s", model, str(e))
+                        if raise_for_status:
+                            for f in tasks_futures:
+                                f.cancel()
+                            raise GeminiBackendError(e, model=model)
+                        results.append(GenerateContentResult(req, "", error=str(e)))
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         if raise_for_status:
             errors = [r.error for r in results if getattr(r, "error", None)]
@@ -1530,9 +1587,11 @@ def generate_credible_sources(
     api_keys: dict[str, str] | None = None,
     model: str = "gemini-3.5-flash",
     max_workers: int = 5,
+    cancel_event: Any = None,
+    heartbeat_callback: Any = None,
 ) -> pd.DataFrame:
     """Grounds taxonomy branches with credible research papers using Google Search."""
-    client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
+    client = MultiModelUtils(api_key=api_key, api_keys=api_keys, cancel_event=cancel_event, heartbeat_callback=heartbeat_callback)
     generator = CredibleSourceGenerator(client)
     return generator.generate(
         taxonomy_df=taxonomy_df,
@@ -1550,9 +1609,11 @@ def fetch_citation_for_node(
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
     model: str = "gemini-3.5-flash",
+    cancel_event: Any = None,
+    heartbeat_callback: Any = None,
 ) -> dict[str, Any]:
     """Fetches research paper citations for a single node via Google Search grounding."""
-    client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
+    client = MultiModelUtils(api_key=api_key, api_keys=api_keys, cancel_event=cancel_event, heartbeat_callback=heartbeat_callback)
     generator = CredibleSourceGenerator(client)
     return generator.generate_for_node(
         domain=domain,
@@ -1574,11 +1635,13 @@ def generate_dynamic_prompts(
     model: str = "gemini-3.5-flash",
     modality: list[str] | str | None = None,
     progress_callback: Any = None,
+    cancel_event: Any = None,
+    heartbeat_callback: Any = None,
 ) -> pd.DataFrame:
     """Synthesizes dynamic prompts for a given taxonomy DataFrame."""
     if progress_callback:
         progress_callback(0.2, f"Initializing AI client for {model}...")
-    client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
+    client = MultiModelUtils(api_key=api_key, api_keys=api_keys, cancel_event=cancel_event, heartbeat_callback=heartbeat_callback)
     if progress_callback:
         progress_callback(0.5, f"Synthesizing {num_prompts} prompts per topic using {model} across parallel workers...")
     gen = PromptsGenerator(client)
@@ -1607,12 +1670,14 @@ def generate_dynamic_taxonomy(
     api_keys: dict[str, str] | None = None,
     model: str = "gemini-3.5-flash",
     progress_callback: Any = None,
+    cancel_event: Any = None,
+    heartbeat_callback: Any = None,
 ) -> pd.DataFrame:
     """Executes the full dynamic taxonomy generation pipeline with single-batch parallelization."""
     if progress_callback:
         progress_callback(0.15, f"Initializing AI client for {model}...")
     
-    ai_client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
+    ai_client = MultiModelUtils(api_key=api_key, api_keys=api_keys, cancel_event=cancel_event, heartbeat_callback=heartbeat_callback)
 
     if progress_callback:
         progress_callback(0.35, f"Generating Level 1 & Level 2 Topics for '{domain}' with {model}...")
@@ -1748,16 +1813,20 @@ def generate_dynamic_evaluations(
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
     progress_callback: Any = None,
+    cancel_event: Any = None,
+    heartbeat_callback: Any = None,
 ) -> pd.DataFrame:
     """Executes parallel evaluation calls across selected models."""
     if progress_callback:
         progress_callback(0.1, "Initializing evaluation client...")
-    client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
+    client = MultiModelUtils(api_key=api_key, api_keys=api_keys, cancel_event=cancel_event, heartbeat_callback=heartbeat_callback)
     evaluator = ModelEvaluationGenerator(client)
     
     all_evals = []
     total = len(target_models)
     for i, (model_id, display_name) in enumerate(target_models):
+        if cancel_event is not None and cancel_event.is_set():
+            raise GenerationCancelledError("Generation stopped by user.")
         if progress_callback:
             pct = 0.2 + (0.7 * ((i + 1) / max(total, 1)))
             progress_callback(pct, f"Generating evaluation responses from {display_name} (batch of {max_prompts} queries)...")
@@ -1857,12 +1926,14 @@ def generate_dynamic_autoratings(
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
     progress_callback: Any = None,
+    cancel_event: Any = None,
+    heartbeat_callback: Any = None,
 ) -> pd.DataFrame:
     """Executes parallel autorater judgments for evaluation responses."""
     target_count = len(eval_df) if (max_rows is None or max_rows <= 0) else min(len(eval_df), max_rows)
     if progress_callback:
         progress_callback(0.2, f"Initializing Autorater Judge model for {target_count} responses...")
-    client = MultiModelUtils(api_key=api_key, api_keys=api_keys)
+    client = MultiModelUtils(api_key=api_key, api_keys=api_keys, cancel_event=cancel_event, heartbeat_callback=heartbeat_callback)
     judge = AutoraterJudgeGenerator(client)
     if progress_callback:
         progress_callback(0.5, f"Rating all {target_count} model responses against rubric in parallel...")
