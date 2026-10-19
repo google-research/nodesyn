@@ -2945,12 +2945,11 @@ elif st.session_state.step == "Evaluation":
     else:
         # Static Evaluation
         def load_eval_data():
-            for fname in ["evaluation_data.csv", "evaluation_data_2.csv"]:
-                if os.path.exists(fname):
-                    try:
-                        return pd.read_csv(fname)
-                    except Exception:
-                        pass
+            if os.path.exists("evaluation_data.csv"):
+                try:
+                    return pd.read_csv("evaluation_data.csv")
+                except Exception:
+                    pass
             return pd.DataFrame()
                 
         eval_df = load_eval_data()
@@ -3396,13 +3395,11 @@ Violation - Safety Issue
                     st.info(f"💡 You selected **{selected_model}**. Click **'Rate'** on the left to refresh the table with {selected_model} ratings.")
                 try:
                     eval_df = None
-                    for fname in ["evaluation_data.csv", "evaluation_data_2.csv"]:
-                        if os.path.exists(fname):
-                            try:
-                                eval_df = pd.read_csv(fname)
-                                break
-                            except Exception:
-                                pass
+                    if os.path.exists("evaluation_data.csv"):
+                        try:
+                            eval_df = pd.read_csv("evaluation_data.csv")
+                        except Exception:
+                            pass
                     if eval_df is None or eval_df.empty:
                         raise FileNotFoundError("evaluation_data.csv not found.")
 
@@ -3745,7 +3742,7 @@ elif st.session_state.step == "Analysis":
             with col_load_bench:
                 if st.button("📊 Load Benchmark Data for Analysis", use_container_width=True):
                     try:
-                        st.session_state.autorater_data = pd.read_csv("evaluation_data_2.csv")
+                        st.session_state.autorater_data = pd.read_csv("evaluation_data.csv")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Could not load benchmark data: {e}")
