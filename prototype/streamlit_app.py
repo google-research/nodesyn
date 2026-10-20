@@ -1137,7 +1137,7 @@ if st.session_state.step == "Home":
                 st.session_state.show_dynamic_cloud_info = True
 
         if st.session_state.get("show_dynamic_cloud_info"):
-            st.info("ℹ️ For dynamic workflow using your own API key, you need to visit https://github.com/google-research/nodesyn .\n\nDue to security reasons, dynamic flow powered by API keys is not supported. Please setup the webapp locally using the instructions mentioned in the Google Research repo.")
+            st.info("ℹ️ For dynamic workflow using your own API key, you need to visit [https://github.com/google-research/nodesyn#how-to-run-it-on-your-own-machine](https://github.com/google-research/nodesyn#how-to-run-it-on-your-own-machine).\n\nDue to security reasons, dynamic flow powered by API keys is not supported. Please setup the webapp locally using the instructions mentioned in the Google Research repo.")
 
 elif st.session_state.step == "Read Me":
     st.title("📖 User Guide: NodeSyn")
@@ -1533,7 +1533,7 @@ elif st.session_state.step == "Taxonomy":
 </div>
 <h2 style="margin: 0; color: white; font-size: 2rem; font-weight: 800; letter-spacing: -0.025em; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">Refine Taxonomy</h2>
 </div>
-<p style="color: rgba(255,255,255,0.85); font-size: 1.05rem; max-width: 600px; margin: 0 0 1rem 0;">Review the generated taxonomy and associated relationships. Edit branches of the taxonomy or proceed to grounded data generation.</p>
+<p style="color: rgba(255,255,255,0.85); font-size: 1.05rem; max-width: 100%; white-space: nowrap; margin: 0 0 1rem 0;">Review the generated taxonomy and associated relationships. Edit branches of the taxonomy or proceed to grounded data generation.</p>
 <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">🌍 {regions}</span>
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">📌 {concept_name}</span>
@@ -2000,7 +2000,7 @@ elif st.session_state.step == "Data":
 </div>
 <h2 style="margin: 0; color: white; font-size: 2rem; font-weight: 800; letter-spacing: -0.025em; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">Review Synthetic Data</h2>
 </div>
-<p style="color: rgba(255,255,255,0.85); font-size: 1.05rem; max-width: 600px; margin: 0 0 1rem 0;">Assess the quality and diversity of the grounded synthetic data you created.</p>
+<p style="color: rgba(255,255,255,0.85); font-size: 1.05rem; max-width: 100%; white-space: nowrap; margin: 0 0 1rem 0;">Assess the quality and diversity of the grounded synthetic data you created.</p>
 <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">🌍 {regions}</span>
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">📌 {concept_name}</span>
@@ -2518,7 +2518,7 @@ elif st.session_state.step == "Evaluation":
 </div>
 <h2 style="margin: 0; color: white; font-size: 2.2rem; font-weight: 800; letter-spacing: -0.025em; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">Evaluate Your Target Model</h2>
 </div>
-<p style="color: rgba(255,255,255,0.9); font-size: 1.05rem; max-width: 650px; margin: 0 0 1rem 0;">Feed synthesized benchmark queries into target AI models and review comparative evaluation outputs.</p>
+<p style="color: rgba(255,255,255,0.9); font-size: 1.05rem; max-width: 100%; white-space: nowrap; margin: 0 0 1rem 0;">Feed synthesized benchmark queries into target AI models and review comparative evaluation outputs.</p>
 <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">🌍 {regions}</span>
 <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">📌 {concept_name}</span>
@@ -3121,7 +3121,7 @@ elif st.session_state.step == "Autorater":
 </div>
 <h2 style="margin: 0; color: white; font-size: 2rem; font-weight: 800; letter-spacing: -0.025em; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">Define Autorator</h2>
 </div>
-<p style="color: rgba(255,255,255,0.85); font-size: 1.05rem; max-width: 600px; margin: 0;">Configure the evaluation rubric and provide structured feedback on model annotations.</p>
+<p style="color: rgba(255,255,255,0.85); font-size: 1.05rem; max-width: 100%; white-space: nowrap; margin: 0;">Configure the evaluation rubric and provide structured feedback on model annotations.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -3598,7 +3598,7 @@ elif st.session_state.step == "Analysis":
 </div>
 <h2 style="margin: 0; color: white; font-size: 2rem; font-weight: 800; letter-spacing: -0.025em; text-shadow: 0 2px 4px rgba(0,0,0,0.2); font-family: 'Inter', sans-serif;">Error Analysis Dashboard</h2>
 </div>
-<p style="color: rgba(255,255,255,0.85); font-size: 1.05rem; max-width: 600px; margin: 0; font-family: 'Inter', sans-serif;">Disclosure analysis across models and data sources. Identify failure patterns and missing medical disclaimers.</p>
+<p style="color: rgba(255,255,255,0.85); font-size: 1.05rem; max-width: 100%; white-space: nowrap; margin: 0; font-family: 'Inter', sans-serif;">Disclosure analysis across models and data sources. Identify failure patterns and missing medical disclaimers.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -4405,7 +4405,7 @@ elif st.session_state.step == "Analysis":
             fig_facet.update_layout(
                 font=FONT_STYLE,
                 title=dict(
-                    text="Top Failure Bi-grams per Model",
+                    text="Top Bi-grams per Model",
                     font=dict(size=17, family="'Inter', sans-serif", color="#0f172a"),
                 ),
                 paper_bgcolor="white",
@@ -4462,11 +4462,35 @@ elif st.session_state.step == "Analysis":
                                 'padding: 0.75rem 0;">No bi-grams shared across all models.</p>',
                                 unsafe_allow_html=True)
 
+            st.markdown("""
+<style>
+details.expand-phrases > summary {
+    list-style: none;
+    color: #6366f1;
+    cursor: pointer;
+    font-weight: 500;
+}
+details.expand-phrases > summary::-webkit-details-marker {
+    display: none;
+}
+details.expand-phrases > summary:hover {
+    text-decoration: underline;
+}
+details.expand-phrases[open] > summary {
+    display: none;
+}
+</style>
+""", unsafe_allow_html=True)
             unique_cols = st.columns(len(models))
             for idx, m in enumerate(models):
                 with unique_cols[idx]:
                     m_color = MODEL_COLORS.get(m, default_color)["line"]
                     unique_list = sorted(unique_phrases.get(m, set()))
+                    more_html = (
+                        f"<details class='expand-phrases'><summary>…and {len(unique_list) - 6} more</summary>"
+                        f"{'<br>'.join(f'• {p}' for p in unique_list[6:])}</details>"
+                        if len(unique_list) > 6 else ""
+                    )
                     st.markdown(f"""
 <div style="background: white; padding: 0.75rem 1rem; border-radius: 10px;
             border: 1px solid #e2e8f0; border-top: 3px solid {m_color}; margin-top: 0.75rem;">
@@ -4477,7 +4501,7 @@ elif st.session_state.step == "Analysis":
               margin-bottom: 0.5rem;">{len(unique_list)} phrases</div>
   <div style="font-size: 0.75rem; color: #64748b; font-family: 'Inter', sans-serif; line-height: 1.6;">
     {"<br>".join(f'• {p}' for p in unique_list[:6])}
-    {"<br><span style='color:#94a3b8'>…and " + str(len(unique_list) - 6) + " more</span>" if len(unique_list) > 6 else ""}
+    {more_html}
   </div>
 </div>""", unsafe_allow_html=True)
         else:
