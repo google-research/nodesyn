@@ -1,4 +1,5 @@
 import os
+import re
 import math
 import streamlit as st
 import streamlit.components.v1 as components
@@ -75,7 +76,7 @@ PROVIDER_MODELS = {
 }
 
 def get_app_api_keys() -> dict[str, str]:
-    """Retrieves all active API keys securely configured in the environment via run.sh."""
+    """Retrieves all active API keys securely configured in the environment via run.sh or updated in session."""
     keys = {}
     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if gemini_key and str(gemini_key).strip():
@@ -97,6 +98,12 @@ def get_app_api_keys() -> dict[str, str]:
     )
     if llama_key and str(llama_key).strip():
         keys["llama"] = str(llama_key).strip()
+
+    overrides = st.session_state.get("override_api_keys", {})
+    if isinstance(overrides, dict):
+        for k, v in overrides.items():
+            if v and str(v).strip():
+                keys[k] = str(v).strip()
 
     return keys
 
@@ -236,6 +243,40 @@ def display_backend_error(
             f"*{explanation}*"
         )
         st.warning(f"👉 **Action Needed:** {retry_action}")
+
+    if category == "AUTH_ERROR":
+        auth_provider = diag.get("provider") or (get_model_provider(target_model) if target_model else "gemini")
+        provider_label = PROVIDER_DISPLAY_NAMES.get(auth_provider, auth_provider.title())
+        env_var_map = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+        }
+        env_var_name = env_var_map.get(auth_provider, "GEMINI_API_KEY")
+        key_input_id = f"inline_api_key_{auth_provider}_{abs(hash(str(context))) % 100000}"
+        col_k1, col_k2 = st.columns([2.5, 1.2])
+        with col_k1:
+            new_api_key_val = st.text_input(
+                f"🔑 Enter a valid {provider_label} API Key ({env_var_name})",
+                type="password",
+                placeholder=f"Paste valid {env_var_name} here...",
+                key=key_input_id,
+            )
+        with col_k2:
+            st.markdown("<div style='height: 1.75rem;'></div>", unsafe_allow_html=True)
+            if st.button(f"💾 Save {provider_label} Key", key=f"save_{key_input_id}", type="primary", use_container_width=True):
+                cleaned_key = (new_api_key_val or "").strip()
+                if cleaned_key:
+                    if "override_api_keys" not in st.session_state:
+                        st.session_state["override_api_keys"] = {}
+                    st.session_state["override_api_keys"][auth_provider] = cleaned_key
+                    os.environ[env_var_name] = cleaned_key
+                    if on_retry:
+                        on_retry()
+                    st.toast(f"✅ Updated {provider_label} API key for this session! Please click Generate again.")
+                    st.rerun()
+                else:
+                    st.warning("Please paste a non-empty API key first.")
 
     col_btn, col_exp = st.columns([1.5, 2.5])
     with col_btn:
@@ -1255,6 +1296,15 @@ elif st.session_state.step == "Concept":
 """, unsafe_allow_html=True)
             
             if is_dynamic:
+                st.markdown("""
+<style>
+.st-key-concept_selector [data-baseweb="select"] input {
+    caret-color: transparent !important;
+    pointer-events: none !important;
+    user-select: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
                 preset_options = [
                     "Custom Domain",
                     "Example: Medical Advice",
@@ -1262,12 +1312,15 @@ elif st.session_state.step == "Concept":
                 ]
                 saved_selector = st.session_state.get("concept_selector", "Custom Domain")
                 idx = preset_options.index(saved_selector) if saved_selector in preset_options else 0
+                import inspect as _inspect
+                _sb_kwargs = {"filter_mode": None} if "filter_mode" in _inspect.signature(st.selectbox).parameters else {}
                 selected_concept = st.selectbox(
                     "Target Concept",
                     preset_options,
                     index=idx,
                     key="concept_selector",
-                    label_visibility="collapsed"
+                    label_visibility="collapsed",
+                    **_sb_kwargs,
                 )
                 is_custom_domain = (selected_concept == "Custom Domain")
                 if is_custom_domain:
@@ -3598,7 +3651,7 @@ elif st.session_state.step == "Analysis":
 </div>
 <h2 style="margin: 0; color: white; font-size: 2rem; font-weight: 800; letter-spacing: -0.025em; text-shadow: 0 2px 4px rgba(0,0,0,0.2); font-family: 'Inter', sans-serif;">Error Analysis Dashboard</h2>
 </div>
-<p style="color: rgba(255,255,255,0.85); font-size: 1.05rem; max-width: 100%; white-space: nowrap; margin: 0; font-family: 'Inter', sans-serif;">Disclosure analysis across models and data sources. Identify failure patterns and missing medical disclaimers.</p>
+<p style="color: rgba(255,255,255,0.85); font-size: 1.05rem; max-width: 100%; white-space: nowrap; margin: 0; font-family: 'Inter', sans-serif;">Failure analysis across models and data sources. Identify failure patterns and missing medical disclaimers.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -3790,6 +3843,237 @@ elif st.session_state.step == "Analysis":
                     lambda x: "No Disclosure" if str(x).strip().lower() == "no disclosure" else "Disclosure"
                 )
 
+    # ── Extract & Normalize Dynamic Autorater Labels from Previous Tab ───────
+    def extract_rubric_labels_from_text(rubric_str: str) -> list[str]:
+        """Extracts candidate classification labels defined in the Autorater rubric text."""
+        if not rubric_str or not str(rubric_str).strip():
+            return []
+        text = str(rubric_str)
+        labels: list[str] = []
+        # 1. Check lines after 'Response Format Constraint'
+        if "Response Format Constraint" in text:
+            after = text.split("Response Format Constraint", 1)[1]
+            for line in after.splitlines():
+                s = line.strip().strip("-*•`\"' ")
+                if not s:
+                    continue
+                if s.lower().startswith("your output must be") or s.startswith("#"):
+                    continue
+                if len(s) <= 80 and s not in labels:
+                    labels.append(s)
+        # 2. Check bullet/numbered definitions like '- **Label Name**:' or '1. **Label Name** (note):'
+        for m in re.finditer(r"^\s*(?:[-*•]|\d+\.)\s*\*\*([^*:\n]{2,70})\*\*\s*(?:\([^)\n]*\))?\s*:", text, flags=re.MULTILINE):
+            cand = m.group(1).strip()
+            if cand and cand not in labels:
+                labels.append(cand)
+        return labels
+
+    active_concept_for_rubric = st.session_state.get("saved_concept", st.session_state.get("target_concept", "Medical Advice"))
+    fallback_rubric_map = {
+        "Medical Advice": [
+            "Disclosure - with instructions",
+            "Disclosure - without instructions",
+            "No disclosure",
+        ],
+        "Hate Speech": [
+            "Safe - Appropriate Refusal",
+            "Safe - Nuanced/Educational",
+            "Violation - Harmful Content",
+        ],
+    }
+    rubric_defined_labels: list[str] = []
+    if is_dynamic:
+        raw_rubric_txt = st.session_state.get("dynamic_rubric_input", "")
+        rubric_defined_labels = extract_rubric_labels_from_text(raw_rubric_txt)
+        if not rubric_defined_labels:
+            rubric_defined_labels = fallback_rubric_map.get(
+                active_concept_for_rubric,
+                [
+                    "Safe - Grounded & Aligned",
+                    "Partially Safe - Minor Issues",
+                    "Violation - Safety Issue",
+                ],
+            )
+    else:
+        rubric_defined_labels = fallback_rubric_map["Medical Advice"]
+
+    all_autorater_labels: list[str] = []
+    if not df_med_plot_cleaned.empty:
+        if "label" in df_med_plot_cleaned.columns and (
+            "Safety Status" not in df_med_plot_cleaned.columns
+            or df_med_plot_cleaned["Safety Status"].isna().all()
+        ):
+            df_med_plot_cleaned["Safety Status"] = df_med_plot_cleaned["label"]
+
+        canonical_by_lower = {lbl.lower(): lbl for lbl in rubric_defined_labels}
+
+        def normalize_autorater_status(val: Any) -> str:
+            s = str(val).strip().strip("*\"'`") if pd.notna(val) else ""
+            if not s or s.lower() in ("nan", "none", "null"):
+                return rubric_defined_labels[-1] if rubric_defined_labels else "Failure"
+            s_low = s.lower()
+            if s_low in canonical_by_lower:
+                return canonical_by_lower[s_low]
+            return s
+
+        df_med_plot_cleaned["Safety Status"] = df_med_plot_cleaned["Safety Status"].apply(normalize_autorater_status)
+        present_labels = [
+            str(x).strip()
+            for x in df_med_plot_cleaned["Safety Status"].dropna().unique().tolist()
+            if str(x).strip()
+        ]
+        # Order: rubric-defined labels that are present or defined, followed by any extra data labels
+        for r_lbl in rubric_defined_labels:
+            if r_lbl in present_labels and r_lbl not in all_autorater_labels:
+                all_autorater_labels.append(r_lbl)
+        for p_lbl in present_labels:
+            if p_lbl not in all_autorater_labels:
+                all_autorater_labels.append(p_lbl)
+        for r_lbl in rubric_defined_labels:
+            if r_lbl not in all_autorater_labels:
+                all_autorater_labels.append(r_lbl)
+
+    if not all_autorater_labels:
+        all_autorater_labels = rubric_defined_labels or ["Failure", "No Failure"]
+
+    def get_default_failure_label(labels: list[str]) -> str:
+        """Selects the default failure/violation label from the available Autorater labels."""
+        if not labels:
+            return "Failure"
+        strong_keywords = (
+            "violation",
+            "no disclosure",
+            "non-disclosure",
+            "unsafe",
+            "harmful",
+            "fail",
+            "error",
+            "inappropriate",
+            "rejected",
+        )
+        for lbl in labels:
+            l_low = lbl.lower()
+            if any(k in l_low for k in strong_keywords):
+                return lbl
+        secondary_keywords = ("issue", "partial", "without")
+        for lbl in labels:
+            l_low = lbl.lower()
+            if any(k in l_low for k in secondary_keywords):
+                return lbl
+        return labels[-1]
+
+    default_failure_label = get_default_failure_label(all_autorater_labels)
+    default_failure_idx = (
+        all_autorater_labels.index(default_failure_label)
+        if default_failure_label in all_autorater_labels
+        else 0
+    )
+
+    LABEL_COLOR_PALETTE = [
+        {"bar": "#6366f1", "text": "#4f46e5"},
+        {"bar": "#f59e0b", "text": "#d97706"},
+        {"bar": "#f43f5e", "text": "#e11d48"},
+        {"bar": "#10b981", "text": "#059669"},
+        {"bar": "#a855f7", "text": "#9333ea"},
+        {"bar": "#06b6d4", "text": "#0891b2"},
+        {"bar": "#ec4899", "text": "#db2777"},
+    ]
+
+    def get_autorater_label_colors(labels: list[str]) -> dict[str, dict[str, str]]:
+        """Assigns distinct, semantically appropriate colors to each Autorater label."""
+        assigned: dict[str, dict[str, str]] = {}
+        used_bars: set[str] = set()
+        for idx, lbl in enumerate(labels):
+            l_low = lbl.lower()
+            candidate = None
+            if any(k in l_low for k in ("violation", "no disclosure", "non-disclosure", "unsafe", "harmful", "fail")):
+                candidate = {"bar": "#f43f5e", "text": "#e11d48"}
+            elif any(k in l_low for k in ("without", "partial", "minor", "nuanced")):
+                candidate = {"bar": "#f59e0b", "text": "#d97706"}
+            elif any(k in l_low for k in ("safe", "with instructions", "grounded", "disclosure")):
+                candidate = {"bar": "#6366f1", "text": "#4f46e5"}
+
+            if candidate and candidate["bar"] not in used_bars:
+                assigned[lbl] = candidate
+                used_bars.add(candidate["bar"])
+            else:
+                for pal in LABEL_COLOR_PALETTE:
+                    if pal["bar"] not in used_bars:
+                        assigned[lbl] = pal
+                        used_bars.add(pal["bar"])
+                        break
+                else:
+                    assigned[lbl] = LABEL_COLOR_PALETTE[idx % len(LABEL_COLOR_PALETTE)]
+        return assigned
+
+    AUTORATER_LABEL_COLORS = get_autorater_label_colors(all_autorater_labels)
+
+    def render_multi_label_checkbox_dropdown(key_prefix: str, chart_context: str) -> list[str]:
+        """Renders a per-diagram dropdown with checkboxes to select multiple Autorater labels."""
+        col_note, col_pop = st.columns([2.3, 1.2])
+        selected_labels: list[str] = []
+        with col_pop:
+            # Pre-compute count for button label
+            prelim_selected = [
+                lbl
+                for idx, lbl in enumerate(all_autorater_labels)
+                if st.session_state.get(f"{key_prefix}_chk_{idx}", True)
+            ]
+            if not prelim_selected:
+                prelim_selected = list(all_autorater_labels)
+            with st.popover(
+                f"🏷️ Autorater Labels ({len(prelim_selected)}/{len(all_autorater_labels)} selected)",
+                use_container_width=True,
+            ):
+                st.markdown(
+                    "<div style='font-size:0.8rem; font-weight:700; color:#334155; margin-bottom:0.35rem;'>"
+                    "Select Autorater Labels to Display:</div>",
+                    unsafe_allow_html=True,
+                )
+                for idx, lbl in enumerate(all_autorater_labels):
+                    chk_key = f"{key_prefix}_chk_{idx}"
+                    if chk_key not in st.session_state:
+                        st.session_state[chk_key] = True
+                    if st.checkbox(lbl, key=chk_key):
+                        selected_labels.append(lbl)
+        if not selected_labels:
+            selected_labels = [default_failure_label]
+        with col_note:
+            badges = " ".join(
+                f"<span style='display:inline-block; background:#eef2ff; color:#4338ca; "
+                f"border:1px solid #c7d2fe; border-radius:999px; padding:2px 10px; "
+                f"font-size:0.75rem; font-weight:600; margin-right:4px;'>{lbl}</span>"
+                for lbl in selected_labels
+            )
+            st.markdown(
+                f"<div style='padding-top:0.35rem; font-size:0.82rem; color:#64748b;'>"
+                f"<b>{chart_context}:</b> Showing {badges}</div>",
+                unsafe_allow_html=True,
+            )
+        return selected_labels
+
+    def render_single_failure_label_dropdown(key_prefix: str, chart_context: str) -> str:
+        """Renders a per-diagram dropdown to select which Autorater label represents the failure rate."""
+        col_note, col_sel = st.columns([2.2, 1.3])
+        with col_sel:
+            chosen = st.selectbox(
+                "Select Failure Label",
+                options=all_autorater_labels,
+                index=default_failure_idx,
+                key=f"{key_prefix}_failure_label_select",
+                label_visibility="collapsed",
+            )
+        with col_note:
+            st.markdown(
+                f"<div style='padding-top:0.4rem; font-size:0.82rem; color:#64748b;'>"
+                f"🎯 <b>{chart_context} — Failure Label:</b> "
+                f"<span style='background:#fef2f2; color:#dc2626; border:1px solid #fecaca; "
+                f"border-radius:999px; padding:2px 10px; font-size:0.76rem; font-weight:700;'>{chosen}</span>"
+                f" <span style='font-size:0.75rem; color:#94a3b8;'>(Choose Autorater label on the right ➔)</span></div>",
+                unsafe_allow_html=True,
+            )
+        return chosen
+
     # ── Shared Styling Constants ─────────────────────────────────────────────
     FONT_STYLE = dict(family="'Inter', sans-serif", size=14, color="#334155")
     BRAND_COLORSCALE = [
@@ -3932,24 +4216,33 @@ elif st.session_state.step == "Analysis":
     # ── KPI Summary Cards ────────────────────────────────────────────────────
     if not df_med_plot_cleaned.empty:
         total_queries = len(df_med_plot_cleaned)
-        disclosure_count = len(df_med_plot_cleaned[df_med_plot_cleaned["Binary Safety Status"] == "Disclosure"])
-        overall_disclosure_rate = (disclosure_count / total_queries * 100) if total_queries > 0 else 0
+        kpi_failure_label = default_failure_label
+        failure_count = len(df_med_plot_cleaned[df_med_plot_cleaned["Safety Status"] == kpi_failure_label])
+        overall_failure_rate = (failure_count / total_queries * 100) if total_queries > 0 else 0
 
-        # Most vulnerable L1 category (highest No Disclosure rate)
-        l1_status = df_med_plot_cleaned.groupby(["level1", "Binary Safety Status"]).size().reset_index(name="Count")
+        # Most vulnerable L1 category (highest rate for kpi_failure_label)
+        l1_status = df_med_plot_cleaned.groupby(["level1", "Safety Status"]).size().reset_index(name="Count")
         l1_totals = df_med_plot_cleaned.groupby("level1").size().reset_index(name="Total")
-        l1_no_disc = l1_status[l1_status["Binary Safety Status"] == "No Disclosure"].merge(l1_totals, on="level1")
-        l1_no_disc["Rate"] = l1_no_disc["Count"] / l1_no_disc["Total"] * 100
-        most_vulnerable_l1 = l1_no_disc.loc[l1_no_disc["Rate"].idxmax(), "level1"] if not l1_no_disc.empty else "N/A"
-        most_vulnerable_rate = l1_no_disc["Rate"].max() if not l1_no_disc.empty else 0
+        l1_fail_df = l1_totals.merge(
+            l1_status[l1_status["Safety Status"] == kpi_failure_label],
+            on="level1",
+            how="left",
+        ).fillna({"Count": 0})
+        l1_fail_df["Rate"] = l1_fail_df["Count"] / l1_fail_df["Total"] * 100
+        most_vulnerable_l1 = l1_fail_df.loc[l1_fail_df["Rate"].idxmax(), "level1"] if not l1_fail_df.empty else "N/A"
+        most_vulnerable_rate = l1_fail_df["Rate"].max() if not l1_fail_df.empty else 0
 
-        # Best performing model (highest disclosure rate)
-        model_disc = df_med_plot_cleaned.groupby(["Model", "Binary Safety Status"]).size().reset_index(name="Count")
+        # Best performing model (lowest failure rate for kpi_failure_label)
+        model_status = df_med_plot_cleaned.groupby(["Model", "Safety Status"]).size().reset_index(name="Count")
         model_totals = df_med_plot_cleaned.groupby("Model").size().reset_index(name="Total")
-        model_disc_only = model_disc[model_disc["Binary Safety Status"] == "Disclosure"].merge(model_totals, on="Model")
-        model_disc_only["Rate"] = model_disc_only["Count"] / model_disc_only["Total"] * 100
-        best_model = model_disc_only.loc[model_disc_only["Rate"].idxmax(), "Model"] if not model_disc_only.empty else "N/A"
-        best_model_rate = model_disc_only["Rate"].max() if not model_disc_only.empty else 0
+        model_fail_df = model_totals.merge(
+            model_status[model_status["Safety Status"] == kpi_failure_label],
+            on="Model",
+            how="left",
+        ).fillna({"Count": 0})
+        model_fail_df["Rate"] = model_fail_df["Count"] / model_fail_df["Total"] * 100
+        best_model = model_fail_df.loc[model_fail_df["Rate"].idxmin(), "Model"] if not model_fail_df.empty else "N/A"
+        best_model_rate = model_fail_df["Rate"].min() if not model_fail_df.empty else 0
 
         st.markdown(f"""
 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem;">
@@ -3966,10 +4259,10 @@ elif st.session_state.step == "Analysis":
     <div style="position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, #22c55e, #4ade80);"></div>
     <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
       <div style="width: 36px; height: 36px; background: #f0fdf4; border-radius: 10px; display: flex; align-items: center; justify-content: center;"><span style="font-size: 1.1rem;">✅</span></div>
-      <span style="font-size: 0.78rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-family: 'Inter', sans-serif;">Disclosure Rate</span>
+      <span style="font-size: 0.78rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-family: 'Inter', sans-serif;">Failure Rate</span>
     </div>
-    <div style="font-size: 2rem; font-weight: 800; color: #0f172a; letter-spacing: -0.025em; font-family: 'Inter', sans-serif;">{overall_disclosure_rate:.1f}%</div>
-    <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.25rem; font-family: 'Inter', sans-serif;">{disclosure_count:,} disclosure responses</div>
+    <div style="font-size: 2rem; font-weight: 800; color: #0f172a; letter-spacing: -0.025em; font-family: 'Inter', sans-serif;">{overall_failure_rate:.1f}%</div>
+    <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.25rem; font-family: 'Inter', sans-serif;">{failure_count:,} failure responses ({kpi_failure_label})</div>
   </div>
   <div style="background: white; border: 1px solid #e2e8f0; border-radius: 16px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.06); transition: transform 0.2s; position: relative; overflow: hidden;">
     <div style="position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, #ef4444, #f87171);"></div>
@@ -3987,7 +4280,7 @@ elif st.session_state.step == "Analysis":
       <span style="font-size: 0.78rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-family: 'Inter', sans-serif;">Best Model</span>
     </div>
     <div style="font-size: 1.15rem; font-weight: 800; color: #0f172a; letter-spacing: -0.015em; font-family: 'Inter', sans-serif;">{best_model}</div>
-    <div style="font-size: 0.8rem; color: #22c55e; margin-top: 0.25rem; font-weight: 600; font-family: 'Inter', sans-serif;">{best_model_rate:.1f}% disclosure rate</div>
+    <div style="font-size: 0.8rem; color: #22c55e; margin-top: 0.25rem; font-weight: 600; font-family: 'Inter', sans-serif;">{best_model_rate:.1f}% failure rate</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -4010,45 +4303,52 @@ elif st.session_state.step == "Analysis":
     # ── Tab: Model Comparison (NEW) ──────────────────────────────────────────
     with tab_compare:
         if not df_med_plot_cleaned.empty:
-            model_status_counts = df_med_plot_cleaned.groupby(["Model", "Binary Safety Status"]).size().reset_index(name="Count")
+            selected_cmp_labels = render_multi_label_checkbox_dropdown(
+                "analysis_cmp", "Model Comparison"
+            )
+            model_status_counts = df_med_plot_cleaned.groupby(["Model", "Safety Status"]).size().reset_index(name="Count")
             model_totals_cmp = df_med_plot_cleaned.groupby("Model").size().reset_index(name="Total")
             model_status_counts = model_status_counts.merge(model_totals_cmp, on="Model")
             model_status_counts["Percentage"] = model_status_counts["Count"] / model_status_counts["Total"] * 100
 
-            models_ordered = model_status_counts.groupby("Model").apply(
-                lambda g: g[g["Binary Safety Status"] == "Disclosure"]["Percentage"].values[0] if len(g[g["Binary Safety Status"] == "Disclosure"]) > 0 else 0
-            ).sort_values(ascending=False).index.tolist()
+            sort_lbl = selected_cmp_labels[0] if selected_cmp_labels else default_failure_label
+            models_ordered = (
+                df_med_plot_cleaned.groupby("Model")
+                .apply(
+                    lambda g: (g["Safety Status"] == sort_lbl).sum() / max(len(g), 1) * 100
+                )
+                .sort_values(ascending=False)
+                .index.tolist()
+            )
 
             fig_compare = go.Figure()
-
-            disc_data = model_status_counts[model_status_counts["Binary Safety Status"] == "Disclosure"]
-            no_disc_data = model_status_counts[model_status_counts["Binary Safety Status"] == "No Disclosure"]
-
-            disc_vals = [disc_data[disc_data["Model"] == m]["Percentage"].values[0] if len(disc_data[disc_data["Model"] == m]) > 0 else 0 for m in models_ordered]
-            no_disc_vals = [no_disc_data[no_disc_data["Model"] == m]["Percentage"].values[0] if len(no_disc_data[no_disc_data["Model"] == m]) > 0 else 0 for m in models_ordered]
-
-            fig_compare.add_trace(go.Bar(
-                name="Disclosure", x=models_ordered, y=disc_vals,
-                marker=dict(color="#6366f1", cornerradius=6),
-                text=[f"{v:.1f}%" for v in disc_vals], textposition="outside",
-                textfont=dict(size=13, family="'Inter', sans-serif", color="#4f46e5", weight=700),
-                hovertemplate="<b>%{x}</b><br>Disclosure: %{y:.1f}%<extra></extra>",
-            ))
-            fig_compare.add_trace(go.Bar(
-                name="No Disclosure", x=models_ordered, y=no_disc_vals,
-                marker=dict(color="#fbbf24", cornerradius=6),
-                text=[f"{v:.1f}%" for v in no_disc_vals], textposition="outside",
-                textfont=dict(size=13, family="'Inter', sans-serif", color="#d97706", weight=700),
-                hovertemplate="<b>%{x}</b><br>No Disclosure: %{y:.1f}%<extra></extra>",
-            ))
+            for idx, lbl in enumerate(selected_cmp_labels):
+                lbl_data = model_status_counts[model_status_counts["Safety Status"] == lbl]
+                lbl_vals = [
+                    lbl_data[lbl_data["Model"] == m]["Percentage"].values[0]
+                    if len(lbl_data[lbl_data["Model"] == m]) > 0
+                    else 0
+                    for m in models_ordered
+                ]
+                lbl_colors = AUTORATER_LABEL_COLORS.get(lbl, LABEL_COLOR_PALETTE[idx % len(LABEL_COLOR_PALETTE)])
+                fig_compare.add_trace(go.Bar(
+                    name=lbl,
+                    x=models_ordered,
+                    y=lbl_vals,
+                    marker=dict(color=lbl_colors["bar"], cornerradius=6),
+                    text=[f"{v:.1f}%" for v in lbl_vals],
+                    textposition="outside",
+                    textfont=dict(size=13, family="'Inter', sans-serif", color=lbl_colors["text"], weight=700),
+                    hovertemplate=f"<b>%{{x}}</b><br>{lbl}: %{{y:.1f}}%<extra></extra>",
+                ))
 
             fig_compare.update_layout(
                 barmode="group",
-                title=dict(text="Disclosure vs. Non-Disclosure Rate by Model", font=dict(size=17, family="'Inter', sans-serif", color="#0f172a")),
+                title=dict(text="Failure Rate by Model", font=dict(size=17, family="'Inter', sans-serif", color="#0f172a")),
                 font=FONT_STYLE,
                 template="simple_white",
-                height=500,
-                margin=dict(l=60, r=40, t=80, b=60),
+                height=520,
+                margin=dict(l=60, r=40, t=90, b=60),
                 paper_bgcolor="white",
                 plot_bgcolor="white",
                 legend=dict(
@@ -4066,8 +4366,9 @@ elif st.session_state.step == "Analysis":
     # ── Tab: Radar Analysis (NEW) ────────────────────────────────────────────
     with tab_radar:
         if not df_med_plot_cleaned.empty:
+            radar_fail_label = render_single_failure_label_dropdown("analysis_radar", "Radar Analysis")
             radar_totals = df_med_plot_cleaned.groupby(["Model", "level1"]).size().reset_index(name="Total")
-            radar_fails = df_med_plot_cleaned[df_med_plot_cleaned["Binary Safety Status"] == "No Disclosure"].groupby(["Model", "level1"]).size().reset_index(name="Failures")
+            radar_fails = df_med_plot_cleaned[df_med_plot_cleaned["Safety Status"] == radar_fail_label].groupby(["Model", "level1"]).size().reset_index(name="Failures")
             radar_disc = radar_totals.merge(radar_fails, on=["Model", "level1"], how="left").fillna(0)
             radar_disc["Failure Rate"] = (radar_disc["Failures"] / radar_disc["Total"]) * 100
 
@@ -4077,7 +4378,7 @@ elif st.session_state.step == "Analysis":
                 # Grouped bar chart when categories are fewer than 3
                 fig_cat_bar = px.bar(
                     radar_disc, x="level1", y="Failure Rate", color="Model", barmode="group",
-                    title="Non-Disclosure (Failure) Rate by Level 1 Category per Model",
+                    title=f"Failure Rate ({radar_fail_label}) by Level 1 Category per Model",
                     labels={"level1": "Level 1 Category", "Failure Rate": "Failure Rate (%)"}
                 )
                 fig_cat_bar.update_layout(
@@ -4105,7 +4406,7 @@ elif st.session_state.step == "Analysis":
                         fill="toself",
                         fillcolor=model_colors["fill"],
                         opacity=0.85,
-                        hovertemplate="<b>%{theta}</b><br>Failure Rate: %{r:.1f}%<extra>" + str(model_name) + "</extra>",
+                        hovertemplate=f"<b>%{{theta}}</b><br>{radar_fail_label}: %{{r:.1f}}%<extra>{model_name}</extra>",
                     ))
 
                 fig_radar.update_layout(
@@ -4121,7 +4422,7 @@ elif st.session_state.step == "Analysis":
                         ),
                         bgcolor="white",
                     ),
-                    title=dict(text="Non-Disclosure (Failure) Rate by L1 Category per Model", font=dict(size=17, family="'Inter', sans-serif", color="#0f172a")),
+                    title=dict(text=f"Failure Rate ({radar_fail_label}) by L1 Category per Model", font=dict(size=17, family="'Inter', sans-serif", color="#0f172a")),
                     font=FONT_STYLE,
                     height=600,
                     margin=dict(l=80, r=80, t=100, b=60),
@@ -4140,8 +4441,9 @@ elif st.session_state.step == "Analysis":
     # ── Tab: L1 Heatmap (polished) ───────────────────────────────────────────
     with tab_l1:
         if not df_med_plot_cleaned.empty:
+            l1_fail_label = render_single_failure_label_dropdown("analysis_l1", "L1 Heatmap")
             total_per_l1 = df_med_plot_cleaned.groupby(["level1", "Model"]).size().reset_index(name="Total")
-            fail_per_l1 = df_med_plot_cleaned[df_med_plot_cleaned["Binary Safety Status"] == "No Disclosure"].groupby(["level1", "Model"]).size().reset_index(name="Failures")
+            fail_per_l1 = df_med_plot_cleaned[df_med_plot_cleaned["Safety Status"] == l1_fail_label].groupby(["level1", "Model"]).size().reset_index(name="Failures")
             m_l1 = total_per_l1.merge(fail_per_l1, on=["level1", "Model"], how="left").fillna(0)
             m_l1["Failure_Rate"] = (m_l1["Failures"] / m_l1["Total"]) * 100
 
@@ -4156,7 +4458,7 @@ elif st.session_state.step == "Analysis":
                 df_heatmap_l1.values, df_heatmap_l1.columns.tolist(), df_heatmap_l1.index.tolist()
             ))
             chart_height = max(500, len(df_heatmap_l1.index) * 45 + 180)
-            style_heatmap_layout(fig_l1, "Non-Disclosure Rate by Model × Level 1 Category", chart_height)
+            style_heatmap_layout(fig_l1, f"Failure Rate ({l1_fail_label}) by Model × Level 1 Category", chart_height)
             fig_l1.update_xaxes(title_text="AI Model")
             fig_l1.update_yaxes(title_text="Level 1 Safety Category")
 
@@ -4167,8 +4469,9 @@ elif st.session_state.step == "Analysis":
     # ── Tab: L2 Heatmap (polished) ───────────────────────────────────────────
     with tab_l2:
         if not df_med_plot_cleaned.empty:
+            l2_fail_label = render_single_failure_label_dropdown("analysis_l2", "L2 Heatmap")
             total_per_l2 = df_med_plot_cleaned.groupby(["level2", "Model"]).size().reset_index(name="Total")
-            fail_per_l2 = df_med_plot_cleaned[df_med_plot_cleaned["Binary Safety Status"] == "No Disclosure"].groupby(["level2", "Model"]).size().reset_index(name="Failures")
+            fail_per_l2 = df_med_plot_cleaned[df_med_plot_cleaned["Safety Status"] == l2_fail_label].groupby(["level2", "Model"]).size().reset_index(name="Failures")
             m_l2 = total_per_l2.merge(fail_per_l2, on=["level2", "Model"], how="left").fillna(0)
             m_l2["Failure_Rate"] = (m_l2["Failures"] / m_l2["Total"]) * 100
 
@@ -4183,7 +4486,7 @@ elif st.session_state.step == "Analysis":
                 df_heatmap.values, df_heatmap.columns.tolist(), df_heatmap.index.tolist()
             ))
             chart_height = max(500, len(df_heatmap.index) * 45 + 180)
-            style_heatmap_layout(fig_l2, "Non-Disclosure Rate by Model × Level 2 Category", chart_height)
+            style_heatmap_layout(fig_l2, f"Failure Rate ({l2_fail_label}) by Model × Level 2 Category", chart_height)
             fig_l2.update_xaxes(title_text="AI Model")
             fig_l2.update_yaxes(title_text="Level 2 Safety Category")
 
@@ -4194,15 +4497,22 @@ elif st.session_state.step == "Analysis":
     # ── Tab: Sunburst (polished) ─────────────────────────────────────────────
     with tab_sunburst:
         if not df_med_plot_cleaned.empty:
+            selected_sb_labels = render_multi_label_checkbox_dropdown(
+                "analysis_sunburst", "Hierarchical View"
+            )
+            df_sunburst = df_med_plot_cleaned[df_med_plot_cleaned["Safety Status"].isin(selected_sb_labels)].copy()
+            if df_sunburst.empty:
+                df_sunburst = df_med_plot_cleaned.copy()
+            sb_color_map = {
+                lbl: AUTORATER_LABEL_COLORS.get(lbl, LABEL_COLOR_PALETTE[idx % len(LABEL_COLOR_PALETTE)])["bar"]
+                for idx, lbl in enumerate(all_autorater_labels)
+            }
             fig_sunburst = px.sunburst(
-                df_med_plot_cleaned,
-                path=["Model", "level1", "Binary Safety Status"],
+                df_sunburst,
+                path=["Model", "level1", "Safety Status"],
                 title="Safety Status Distribution by Model and Category",
-                color="Binary Safety Status",
-                color_discrete_map={
-                    "No Disclosure": "#f43f5e",
-                    "Disclosure": "#6366f1",
-                },
+                color="Safety Status",
+                color_discrete_map=sb_color_map,
             )
             fig_sunburst.update_layout(
                 font=FONT_STYLE,
@@ -4222,6 +4532,7 @@ elif st.session_state.step == "Analysis":
     # ── Tab: Text Analysis — Per-Model Bi-gram Comparison ──────────────────────
     with tab_ngram:
         if not df_med_plot_cleaned.empty:
+            ngram_fail_label = render_single_failure_label_dropdown("analysis_ngram", "Text Analysis")
             import re
             from collections import Counter
 
@@ -4323,10 +4634,10 @@ elif st.session_state.step == "Analysis":
                 domain_disp = ", ".join(f"'{d}'" for d in sorted(domain_candidates)[:2])
                 st.caption(f"💡 *Domain name terms ({domain_disp}) are automatically excluded from bi-grams to surface specific failure patterns.*")
 
-            def get_model_ngrams(df, model, text_column="prompts", n=2, top_k=10, only_fails=True):
+            def get_model_ngrams(df, model, text_column="prompts", n=2, top_k=10, only_fails=True, fail_label=None):
                 target_col = text_column if text_column in df.columns else ("query" if "query" in df.columns else df.columns[0])
-                if only_fails and "Binary Safety Status" in df.columns:
-                    df_target = df[(df["Model"] == model) & (df["Binary Safety Status"] == "No Disclosure")]
+                if only_fails and "Safety Status" in df.columns and fail_label:
+                    df_target = df[(df["Model"] == model) & (df["Safety Status"] == fail_label)]
                 else:
                     df_target = df[df["Model"] == model]
 
@@ -4357,12 +4668,12 @@ elif st.session_state.step == "Analysis":
             models = sorted(df_med_plot_cleaned["Model"].unique())
             model_ngram_data = {}
             for m in models:
-                top = get_model_ngrams(df_med_plot_cleaned, m, top_k=10, only_fails=True)
+                top = get_model_ngrams(df_med_plot_cleaned, m, top_k=10, only_fails=True, fail_label=ngram_fail_label)
                 model_ngram_data[m] = dict(top)
 
             has_any_fails = any(len(v) > 0 for v in model_ngram_data.values())
             if not has_any_fails:
-                st.info("💡 **100% Disclosure Rate!** No safety failures were detected across the evaluated responses. Displaying top bi-grams across all evaluated queries below:")
+                st.info(f"💡 **0% Rate for '{ngram_fail_label}'!** No responses with Autorater label **'{ngram_fail_label}'** were detected across the evaluated models. Displaying top bi-grams across all evaluated queries below:")
                 for m in models:
                     model_ngram_data[m] = dict(get_model_ngrams(df_med_plot_cleaned, m, top_k=10, only_fails=False))
 
@@ -4405,7 +4716,7 @@ elif st.session_state.step == "Analysis":
             fig_facet.update_layout(
                 font=FONT_STYLE,
                 title=dict(
-                    text="Top Bi-grams per Model",
+                    text=f"Top Bi-grams per Model ({ngram_fail_label})" if has_any_fails else "Top Bi-grams per Model (All Queries)",
                     font=dict(size=17, family="'Inter', sans-serif", color="#0f172a"),
                 ),
                 paper_bgcolor="white",
@@ -4526,8 +4837,9 @@ details.expand-phrases[open] > summary {
     # ── Tab: User Group ──────────────────────────────────────────────────────
     with t3:
         if not df_med_plot_cleaned.empty:
+            ug_fail_label = render_single_failure_label_dropdown("analysis_ug", "User Group")
             total_per_ug = df_med_plot_cleaned.groupby(["user_group", "Model"]).size().reset_index(name="Total")
-            fail_per_ug = df_med_plot_cleaned[df_med_plot_cleaned["Binary Safety Status"] == "No Disclosure"].groupby(["user_group", "Model"]).size().reset_index(name="Failures")
+            fail_per_ug = df_med_plot_cleaned[df_med_plot_cleaned["Safety Status"] == ug_fail_label].groupby(["user_group", "Model"]).size().reset_index(name="Failures")
             m_ug = total_per_ug.merge(fail_per_ug, on=["user_group", "Model"], how="left").fillna(0)
             m_ug["Failure_Rate"] = (m_ug["Failures"] / m_ug["Total"]) * 100
 
@@ -4542,7 +4854,7 @@ details.expand-phrases[open] > summary {
                 df_heatmap_ug.values, df_heatmap_ug.columns.tolist(), df_heatmap_ug.index.tolist()
             ))
             chart_height = max(500, len(df_heatmap_ug.index) * 45 + 180)
-            style_heatmap_layout(fig_ug, "Non-Disclosure Rate by Model × User Group", chart_height)
+            style_heatmap_layout(fig_ug, f"Failure Rate ({ug_fail_label}) by Model × User Group", chart_height)
             fig_ug.update_xaxes(title_text="AI Model")
             fig_ug.update_yaxes(title_text="User Group")
 
@@ -4553,6 +4865,7 @@ details.expand-phrases[open] > summary {
     # ── Tab: Demographics ────────────────────────────────────────────────────
     with t4:
         if not df_med_plot_cleaned.empty:
+            demo_fail_label = render_single_failure_label_dropdown("analysis_demo", "Demographics")
             df_sliced = df_med_plot_cleaned.dropna(subset=["extracted_Demographics_cleaned"]).copy()
             df_sliced["demographics_list"] = df_sliced["extracted_Demographics_cleaned"].str.split(", ")
             df_exploded = df_sliced.explode("demographics_list")
@@ -4565,7 +4878,7 @@ details.expand-phrases[open] > summary {
             ]
 
             total_per_demo = df_exploded.groupby(["demographics_list", "Model"]).size().reset_index(name="Total")
-            fail_per_demo = df_exploded[df_exploded["Binary Safety Status"] == "No Disclosure"].groupby(["demographics_list", "Model"]).size().reset_index(name="Failures")
+            fail_per_demo = df_exploded[df_exploded["Safety Status"] == demo_fail_label].groupby(["demographics_list", "Model"]).size().reset_index(name="Failures")
             m_demo = total_per_demo.merge(fail_per_demo, on=["demographics_list", "Model"], how="left").fillna(0)
             m_demo["Failure_Rate"] = (m_demo["Failures"] / m_demo["Total"]) * 100
 
@@ -4580,7 +4893,7 @@ details.expand-phrases[open] > summary {
                 df_heatmap_demo.values, df_heatmap_demo.columns.tolist(), df_heatmap_demo.index.tolist()
             ))
             chart_height = max(500, len(df_heatmap_demo.index) * 45 + 180)
-            style_heatmap_layout(fig_demo, "Non-Disclosure Rate by Model × Demographics", chart_height)
+            style_heatmap_layout(fig_demo, f"Failure Rate ({demo_fail_label}) by Model × Demographics", chart_height)
             fig_demo.update_xaxes(title_text="AI Model")
             fig_demo.update_yaxes(title_text="Demographics")
 
@@ -4591,6 +4904,7 @@ details.expand-phrases[open] > summary {
     # ── Tab: Occupation ──────────────────────────────────────────────────────
     with t5:
         if not df_med_plot_cleaned.empty:
+            occ_fail_label = render_single_failure_label_dropdown("analysis_occ", "Occupation")
             df_sliced_occ = df_med_plot_cleaned.dropna(subset=["extracted_occupations_cleaned"]).copy()
             df_sliced_occ["occupations_list"] = df_sliced_occ["extracted_occupations_cleaned"].str.split(", ")
             df_exploded_occ = df_sliced_occ.explode("occupations_list")
@@ -4603,7 +4917,7 @@ details.expand-phrases[open] > summary {
             ]
 
             total_per_occ = df_exploded_occ.groupby(["occupations_list", "Model"]).size().reset_index(name="Total")
-            fail_per_occ = df_exploded_occ[df_exploded_occ["Binary Safety Status"] == "No Disclosure"].groupby(["occupations_list", "Model"]).size().reset_index(name="Failures")
+            fail_per_occ = df_exploded_occ[df_exploded_occ["Safety Status"] == occ_fail_label].groupby(["occupations_list", "Model"]).size().reset_index(name="Failures")
             m_occ = total_per_occ.merge(fail_per_occ, on=["occupations_list", "Model"], how="left").fillna(0)
             m_occ["Failure_Rate"] = (m_occ["Failures"] / m_occ["Total"]) * 100
 
@@ -4618,7 +4932,7 @@ details.expand-phrases[open] > summary {
                 df_heatmap_occ.values, df_heatmap_occ.columns.tolist(), df_heatmap_occ.index.tolist()
             ))
             chart_height = max(500, len(df_heatmap_occ.index) * 45 + 180)
-            style_heatmap_layout(fig_occ, "Non-Disclosure Rate by Model × Occupation", chart_height)
+            style_heatmap_layout(fig_occ, f"Failure Rate ({occ_fail_label}) by Model × Occupation", chart_height)
             fig_occ.update_xaxes(title_text="AI Model")
             fig_occ.update_yaxes(title_text="Occupation")
 
@@ -4770,6 +5084,7 @@ details.expand-phrases[open] > summary {
     # ── Tab: L2 × Occupation ─────────────────────────────────────────────────
     with t6:
         if not df_med_plot_cleaned.empty:
+            t6_fail_label = render_single_failure_label_dropdown("analysis_t6", "L2 × Occupation")
             def calculate_heatmap_occ_l2(df, model_name):
                 df_model = df[df["Model"] == model_name].copy()
                 if df_model.empty:
@@ -4779,10 +5094,10 @@ details.expand-phrases[open] > summary {
                 if df_exploded.empty:
                     return pd.DataFrame()
                 total_counts = df_exploded.groupby(["occ_list", "level2"]).size().reset_index(name="Total")
-                disc_counts = df_exploded[df_exploded["Binary Safety Status"] == "Disclosure"].groupby(["occ_list", "level2"]).size().reset_index(name="Disc_Count")
+                disc_counts = df_exploded[df_exploded["Safety Status"] == t6_fail_label].groupby(["occ_list", "level2"]).size().reset_index(name="Disc_Count")
                 merged_occ = total_counts.merge(disc_counts, on=["occ_list", "level2"], how="left").fillna(0)
-                merged_occ["Disclosure Percentage"] = (merged_occ["Disc_Count"] / merged_occ["Total"]) * 100
-                return merged_occ.pivot_table(index="occ_list", columns="level2", values="Disclosure Percentage", fill_value=0)
+                merged_occ["Failure Percentage"] = (merged_occ["Disc_Count"] / merged_occ["Total"]) * 100
+                return merged_occ.pivot_table(index="occ_list", columns="level2", values="Failure Percentage", fill_value=0)
 
             models_present = sorted(df_med_plot_cleaned["Model"].unique().tolist())
             raw_occ_heatmaps = {m: calculate_heatmap_occ_l2(df_med_plot_cleaned, m) for m in models_present}
@@ -4806,7 +5121,7 @@ details.expand-phrases[open] > summary {
 
             fig_t6, dh = build_interaction_subplot(
                 aligned_occ_heatmaps, all_occupations, all_level2,
-                "Disclosure Rates by Occupation × Level 2 Safety Categories",
+                f"Failure Rates ({t6_fail_label}) by Occupation × Level 2 Safety Categories",
                 left_margin=350,
             )
             st.plotly_chart(fig_t6, use_container_width=True)
@@ -4816,6 +5131,7 @@ details.expand-phrases[open] > summary {
     # ── Tab: L2 × Demographics ───────────────────────────────────────────────
     with t7:
         if not df_med_plot_cleaned.empty:
+            t7_fail_label = render_single_failure_label_dropdown("analysis_t7", "L2 × Demographics")
             def calculate_heatmap_demo_l2(df, model_name):
                 df_model = df[df["Model"] == model_name].copy()
                 if df_model.empty:
@@ -4826,10 +5142,10 @@ details.expand-phrases[open] > summary {
                 if df_exploded.empty:
                     return pd.DataFrame()
                 total_counts = df_exploded.groupby(["demo_list", "level2"]).size().reset_index(name="Total")
-                disc_counts = df_exploded[df_exploded["Binary Safety Status"] == "Disclosure"].groupby(["demo_list", "level2"]).size().reset_index(name="Disc_Count")
+                disc_counts = df_exploded[df_exploded["Safety Status"] == t7_fail_label].groupby(["demo_list", "level2"]).size().reset_index(name="Disc_Count")
                 merged_demo = total_counts.merge(disc_counts, on=["demo_list", "level2"], how="left").fillna(0)
-                merged_demo["Disclosure Percentage"] = (merged_demo["Disc_Count"] / merged_demo["Total"]) * 100
-                return merged_demo.pivot_table(index="demo_list", columns="level2", values="Disclosure Percentage", fill_value=0)
+                merged_demo["Failure Percentage"] = (merged_demo["Disc_Count"] / merged_demo["Total"]) * 100
+                return merged_demo.pivot_table(index="demo_list", columns="level2", values="Failure Percentage", fill_value=0)
 
             models_present = sorted(df_med_plot_cleaned["Model"].unique().tolist())
             raw_demo_heatmaps = {m: calculate_heatmap_demo_l2(df_med_plot_cleaned, m) for m in models_present}
@@ -4853,7 +5169,7 @@ details.expand-phrases[open] > summary {
 
             fig_t7, dh = build_interaction_subplot(
                 aligned_demo_heatmaps, all_dimensions, all_level2_demo,
-                "Disclosure Rates by Demographics × Level 2 Safety Categories",
+                f"Failure Rates ({t7_fail_label}) by Demographics × Level 2 Safety Categories",
                 left_margin=350,
             )
             st.plotly_chart(fig_t7, use_container_width=True)
@@ -4863,6 +5179,7 @@ details.expand-phrases[open] > summary {
     # ── Tab: User Group × Demographics ───────────────────────────────────────
     with t9:
         if not df_med_plot_cleaned.empty:
+            t9_fail_label = render_single_failure_label_dropdown("analysis_t9", "User Group × Demographics")
             def calculate_heatmap_demo_ug(df, model_name):
                 df_model = df[df["Model"] == model_name].copy()
                 if df_model.empty:
@@ -4873,10 +5190,10 @@ details.expand-phrases[open] > summary {
                 if df_exploded.empty:
                     return pd.DataFrame()
                 total_counts = df_exploded.groupby(["demo_list", "user_group"]).size().reset_index(name="Total")
-                disc_counts = df_exploded[df_exploded["Binary Safety Status"] == "Disclosure"].groupby(["demo_list", "user_group"]).size().reset_index(name="Disc_Count")
+                disc_counts = df_exploded[df_exploded["Safety Status"] == t9_fail_label].groupby(["demo_list", "user_group"]).size().reset_index(name="Disc_Count")
                 merged_ug = total_counts.merge(disc_counts, on=["demo_list", "user_group"], how="left").fillna(0)
-                merged_ug["Disclosure Percentage"] = (merged_ug["Disc_Count"] / merged_ug["Total"]) * 100
-                return merged_ug.pivot_table(index="demo_list", columns="user_group", values="Disclosure Percentage", fill_value=0)
+                merged_ug["Failure Percentage"] = (merged_ug["Disc_Count"] / merged_ug["Total"]) * 100
+                return merged_ug.pivot_table(index="demo_list", columns="user_group", values="Failure Percentage", fill_value=0)
 
             models_present = sorted(df_med_plot_cleaned["Model"].unique().tolist())
             raw_ug_heatmaps = {m: calculate_heatmap_demo_ug(df_med_plot_cleaned, m) for m in models_present}
@@ -4900,7 +5217,7 @@ details.expand-phrases[open] > summary {
 
             fig_t9, dh = build_interaction_subplot(
                 aligned_ug_heatmaps, all_dimensions, all_ugs,
-                "Disclosure Rates by Demographics × User Group",
+                f"Failure Rates ({t9_fail_label}) by Demographics × User Group",
                 left_margin=350,
             )
             st.plotly_chart(fig_t9, use_container_width=True)

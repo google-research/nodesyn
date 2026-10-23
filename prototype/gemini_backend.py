@@ -320,20 +320,53 @@ def parse_backend_error(
     if (
         "api_key_invalid" in lower_text
         or "api key not valid" in lower_text
+        or "invalid x-api-key" in lower_text
+        or "invalid_api_key" in lower_text
+        or "incorrect api key" in lower_text
+        or "expired_secret_key" in lower_text
+        or "api key has expired" in lower_text
+        or "authentication_error" in lower_text
+        or "authenticationerror" in lower_text
         or "permission_denied" in lower_text
         or ("400" in lower_text and "api_key" in lower_text)
-        or ("401" in lower_text and "unauthorized" in lower_text)
+        or ("401" in lower_text and ("unauthorized" in lower_text or "api-key" in lower_text or "api key" in lower_text or "authentication" in lower_text))
         or ("403" in lower_text and "forbidden" in lower_text)
         or "unregistered projects" in lower_text
         or "no gemini api key provided" in lower_text
+        or "no anthropic api key provided" in lower_text
+        or "no openai api key provided" in lower_text
     ):
+        resolved_provider = provider or (get_model_provider(model) if model else "gemini")
+        if resolved_provider == "anthropic" or "x-api-key" in lower_text or "anthropic" in lower_text:
+            return {
+                "category": "AUTH_ERROR",
+                "provider": "anthropic",
+                "headline": f"Invalid or Unauthorized Anthropic API Key (401){model_str}",
+                "gist": f"Anthropic API rejected the request for '{model or 'Claude'}': invalid x-api-key (HTTP 401).",
+                "explanation": "The ANTHROPIC_API_KEY currently configured in your environment is invalid, expired, or has been revoked in the Anthropic Console.",
+                "retry_action": "Please enter a valid Anthropic API key (starting with 'sk-ant-...') in the box below or update ANTHROPIC_API_KEY when running ./run.sh, then retry.",
+                "is_retryable": True,
+                "raw_message": clean_text,
+            }
+        if resolved_provider == "openai" or "openai" in lower_text:
+            return {
+                "category": "AUTH_ERROR",
+                "provider": "openai",
+                "headline": f"Invalid or Unauthorized OpenAI API Key (401){model_str}",
+                "gist": f"OpenAI API rejected the request for '{model or 'GPT'}': invalid API key (HTTP 401).",
+                "explanation": "The OPENAI_API_KEY currently configured in your environment is invalid, expired, or has been revoked in the OpenAI platform.",
+                "retry_action": "Please enter a valid OpenAI API key (starting with 'sk-...') in the box below or update OPENAI_API_KEY when running ./run.sh, then retry.",
+                "is_retryable": True,
+                "raw_message": clean_text,
+            }
         return {
             "category": "AUTH_ERROR",
-            "headline": "Invalid or Unauthorized API Key",
-            "gist": "API authentication failed: Invalid, inactive, or unauthorized API key.",
-            "explanation": "The API key provided is not authorized to call the Gemini API or the associated Google Cloud project is inactive.",
-            "retry_action": "Please check your GEMINI_API_KEY environment variable or verify your key in Google AI Studio, then retry.",
-            "is_retryable": False,
+            "provider": "gemini",
+            "headline": f"Invalid or Unauthorized Gemini API Key{model_str}",
+            "gist": "Gemini API authentication failed: Invalid, inactive, or unauthorized API key.",
+            "explanation": "The GEMINI_API_KEY provided is not authorized to call the Gemini API or the associated Google Cloud project is inactive.",
+            "retry_action": "Please enter a valid Gemini API key in the box below or check your GEMINI_API_KEY environment variable, then retry.",
+            "is_retryable": True,
             "raw_message": clean_text,
         }
 
@@ -426,7 +459,13 @@ class MultiModelUtils:
         if api_keys:
             self._api_keys.update({k: v for k, v in api_keys.items() if v})
         if api_key:
-            self._api_keys["gemini"] = api_key
+            key_str = str(api_key).strip()
+            if key_str.startswith("sk-ant-"):
+                self._api_keys["anthropic"] = key_str
+            elif key_str.startswith("sk-"):
+                self._api_keys["openai"] = key_str
+            elif not (api_keys and api_keys.get("gemini")):
+                self._api_keys["gemini"] = key_str
         self._cancel_event = cancel_event
         self._heartbeat_callback = heartbeat_callback
 
@@ -434,9 +473,6 @@ class MultiModelUtils:
         self._openai_client = None
         self._anthropic_client = None
         self._llama_client = None
-
-        if "gemini" in self._api_keys and self._api_keys["gemini"]:
-            self._gemini_client = genai.Client(api_key=self._api_keys["gemini"])
 
     def get_model_provider(self, model: str) -> str:
         return get_model_provider(model)
@@ -451,6 +487,8 @@ class MultiModelUtils:
             g_key = self._api_keys.get("gemini") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
             if not g_key:
                 raise ValueError("No Gemini API Key provided. Set GEMINI_API_KEY environment variable or enter it in the UI.")
+            if "GEMINI_API_KEY" in os.environ and "GOOGLE_API_KEY" in os.environ:
+                os.environ.pop("GOOGLE_API_KEY", None)
             self._gemini_client = genai.Client(api_key=g_key)
 
         config_kwargs: dict[str, Any] = {
@@ -470,7 +508,12 @@ class MultiModelUtils:
         text = response.text if response and response.text else ""
         return text, response
 
-    def _call_openai(self, prompt: str, model: str) -> tuple[str, Any]:
+    def _call_openai(
+        self,
+        prompt: str,
+        model: str,
+        tools: list[dict[str, Any] | types.Tool] | None = None,
+    ) -> tuple[str, Any]:
         if openai is None:
             raise ImportError("openai package is required for OpenAI models. Install via 'pip install openai'.")
         o_key = self._api_keys.get("openai") or os.environ.get("OPENAI_API_KEY")
@@ -478,6 +521,32 @@ class MultiModelUtils:
             raise ValueError("No OpenAI API key provided. Set OPENAI_API_KEY environment variable or enter it in the UI.")
         if not self._openai_client:
             self._openai_client = openai.OpenAI(api_key=o_key)
+
+        if tools and hasattr(self._openai_client, "responses"):
+            for search_tool_type in ("web_search_preview", "web_search"):
+                try:
+                    resp = self._openai_client.responses.create(
+                        model=model,
+                        input=prompt,
+                        tools=[{"type": search_tool_type}],
+                    )
+                    text = getattr(resp, "output_text", None) or ""
+                    if not text and getattr(resp, "output", None):
+                        parts: list[str] = []
+                        for item in resp.output:
+                            for c in getattr(item, "content", None) or []:
+                                if getattr(c, "text", None):
+                                    parts.append(c.text)
+                        text = "\n".join(parts)
+                    if text:
+                        return text, resp
+                except Exception as e:
+                    logging.debug(
+                        "OpenAI responses web search (%s) unavailable for model [%s], falling back: %s",
+                        search_tool_type,
+                        model,
+                        e,
+                    )
 
         kwargs: dict[str, Any] = {
             "model": model,
@@ -490,7 +559,12 @@ class MultiModelUtils:
         text = resp.choices[0].message.content or ""
         return text, resp
 
-    def _call_anthropic(self, prompt: str, model: str) -> tuple[str, Any]:
+    def _call_anthropic(
+        self,
+        prompt: str,
+        model: str,
+        tools: list[dict[str, Any] | types.Tool] | None = None,
+    ) -> tuple[str, Any]:
         if anthropic is None:
             raise ImportError("anthropic package is required for Claude models. Install via 'pip install anthropic'.")
         a_key = self._api_keys.get("anthropic") or os.environ.get("ANTHROPIC_API_KEY")
@@ -511,11 +585,29 @@ class MultiModelUtils:
         }
         resolved_model = claude_model_map.get(model, model)
 
-        resp = self._anthropic_client.messages.create(
-            model=resolved_model,
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        resp = None
+        if tools:
+            try:
+                resp = self._anthropic_client.messages.create(
+                    model=resolved_model,
+                    max_tokens=4096,
+                    tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+                    messages=[{"role": "user", "content": prompt}],
+                )
+            except Exception as e:
+                logging.debug(
+                    "Anthropic web_search_20250305 unavailable for model [%s], falling back to standard messages: %s",
+                    resolved_model,
+                    e,
+                )
+                resp = None
+
+        if resp is None:
+            resp = self._anthropic_client.messages.create(
+                model=resolved_model,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+            )
         text = ""
         if resp and getattr(resp, "content", None):
             for block in resp.content:
@@ -568,9 +660,9 @@ class MultiModelUtils:
         provider = self.get_model_provider(model)
         try:
             if provider == "openai":
-                text, resp = self._call_openai(request.prompt, model)
+                text, resp = self._call_openai(request.prompt, model, tools)
             elif provider == "anthropic":
-                text, resp = self._call_anthropic(request.prompt, model)
+                text, resp = self._call_anthropic(request.prompt, model, tools)
             elif provider == "llama":
                 text, resp = self._call_llama(request.prompt, model)
             else:
@@ -1223,20 +1315,89 @@ class CredibleSourceGenerator:
     def __init__(self, gemini_utils: GeminiUtils):
         self._gemini_utils = gemini_utils
 
+    @staticmethod
+    def _get_search_tools_for_model(model: str) -> list[dict[str, Any] | types.Tool] | None:
+        provider = get_model_provider(model)
+        if provider == "gemini":
+            return [types.Tool(google_search=types.GoogleSearch())]
+        if provider == "openai":
+            return [{"type": "web_search_preview"}]
+        if provider == "anthropic":
+            return [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}]
+        return None
+
+    @classmethod
+    def _search_academic_papers(
+        cls,
+        domain: str,
+        category: str,
+        topic: str,
+        keywords_str: str,
+        max_results: int = 3,
+    ) -> list[tuple[str, str]]:
+        """Queries OpenAlex academic search API to provide real research paper grounding."""
+        queries = [
+            f"{domain} {topic} {keywords_str}".strip(),
+            f"{domain} {category} {topic}".strip(),
+        ]
+        pairs: list[tuple[str, str]] = []
+        for raw_q in queries:
+            q_clean = re.sub(r"[^\w\s-]", " ", raw_q)
+            q_clean = " ".join(q_clean.split()[:10])
+            if not q_clean:
+                continue
+            api_url = (
+                f"https://api.openalex.org/works?search={urllib.parse.quote_plus(q_clean)}"
+                f"&per-page={max_results}"
+            )
+            req = urllib.request.Request(
+                api_url,
+                headers={"User-Agent": "NodeSynth-ResearchLibrarian/1.0 (mailto:research@example.com)"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=3.5) as resp:
+                    data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+                for item in data.get("results", []):
+                    title = str(item.get("title") or item.get("display_name") or "").strip()
+                    primary_loc = item.get("primary_location") or {}
+                    landing_url = primary_loc.get("landing_page_url") or item.get("doi") or item.get("id") or ""
+                    if title and landing_url and all(landing_url != u for u, _ in pairs):
+                        pairs.append((str(landing_url).strip(), title))
+                if pairs:
+                    break
+            except Exception:
+                continue
+        return pairs[:max_results]
+
     def _generate_prompt(
-        self, domain: str, category: str, topic: str, keywords: str | list[str]
+        self,
+        domain: str,
+        category: str,
+        topic: str,
+        keywords: str | list[str],
+        candidate_papers: list[tuple[str, str]] | None = None,
     ) -> str:
         if isinstance(keywords, list):
             keywords_str = ", ".join(str(k) for k in keywords)
         else:
             keywords_str = str(keywords)
 
+        candidate_section = ""
+        if candidate_papers:
+            lines = [f"- Title: {t} | URL: {u}" for u, t in candidate_papers if t and u]
+            if lines:
+                candidate_section = (
+                    "\nReference Academic Search Results (you may use one of these real papers or another real paper from your web search tool):\n"
+                    + "\n".join(lines)
+                    + "\n"
+                )
+
         prompt = textwrap.dedent(f"""\
         You are a research librarian specializing in {domain} research with a focus on {category}.
-        Your task is to use Google Search to find 1 real, existing published research paper directly related to {domain}, specifically {topic} within the context of {keywords_str}.
-        
+        Your task is to use web search to find 1 real, existing published research paper directly related to {domain}, specifically {topic} within the context of {keywords_str}.
+        {candidate_section}
         CRITICAL INSTRUCTIONS:
-        - ONLY cite a real paper that appears in your Google Search results. Do NOT invent or guess paper titles or URLs.
+        - ONLY cite a real paper that appears in your search results. Do NOT invent or guess paper titles or URLs.
         - The Title MUST match the exact title of the paper at the URL you provide.
         - Based on the paper content, extract the specific sensitive group of people (occupation, demographic group, and country) evaluated or affected in this research paper. Do NOT use "General Public".
         
@@ -1346,7 +1507,7 @@ class CredibleSourceGenerator:
         full_response = result.full_response
         content = result.generated_content.strip()
 
-        # 1. Grounding Metadata from Google Search chunks (keep URI and title paired)
+        # 1. Grounding Metadata from provider search chunks (keep URI and title paired)
         if full_response and hasattr(full_response, "candidates") and full_response.candidates:
             cand = full_response.candidates[0]
             grounding_metadata = getattr(cand, "grounding_metadata", None)
@@ -1360,6 +1521,39 @@ class CredibleSourceGenerator:
                         if uri and all(uri != u for u, _ in grounding_pairs):
                             grounding_pairs.append((uri, title))
 
+        # 1b. OpenAI Responses API web search annotations
+        if full_response and hasattr(full_response, "output") and getattr(full_response, "output", None):
+            for item in full_response.output:
+                for c in getattr(item, "content", None) or []:
+                    for ann in getattr(c, "annotations", None) or []:
+                        if getattr(ann, "type", "") == "url_citation" or hasattr(ann, "url"):
+                            uri = getattr(ann, "url", None) or ""
+                            title = getattr(ann, "title", None) or ""
+                            if uri and all(uri != u for u, _ in grounding_pairs):
+                                grounding_pairs.append((uri, title))
+
+        # 1c. Anthropic Messages API web search tool results & citations
+        if full_response and hasattr(full_response, "content") and getattr(full_response, "content", None):
+            for block in full_response.content:
+                if getattr(block, "type", "") == "web_search_tool_result":
+                    for sr in getattr(block, "content", None) or []:
+                        if getattr(sr, "type", "") == "web_search_result" or hasattr(sr, "url"):
+                            uri = getattr(sr, "url", None) or ""
+                            title = getattr(sr, "title", None) or ""
+                            if uri and all(uri != u for u, _ in grounding_pairs):
+                                grounding_pairs.append((uri, title))
+                for cit in getattr(block, "citations", None) or []:
+                    uri = getattr(cit, "url", None) or ""
+                    title = getattr(cit, "title", None) or ""
+                    if uri and all(uri != u for u, _ in grounding_pairs):
+                        grounding_pairs.append((uri, title))
+
+        # 1d. Pre-fetched academic search grounding pairs (OpenAlex)
+        meta_pairs = (result.request.metadata or {}).get("search_grounding_pairs") or []
+        for uri, title in meta_pairs:
+            if uri and all(uri != u for u, _ in grounding_pairs):
+                grounding_pairs.append((uri, title))
+
         # 2. Parse text content
         t_m = re.search(r'(?:\*{0,2}Title\*{0,2}:|\*{0,2}Title:\*{0,2})\s*([^\n;]+)', content, re.IGNORECASE)
         occ_match = re.search(r'(?:\*{0,2}Occupation\*{0,2}:|\*{0,2}Occupation:\*{0,2})\s*([^\n;]+)', content, re.IGNORECASE)
@@ -1372,15 +1566,16 @@ class CredibleSourceGenerator:
         extracted_country = re.sub(r'[*"\'`]', '', country_match.group(1)).strip() if country_match else ""
 
         text_urls: list[str] = []
-        u_m = re.search(r'(?:URL|Link)[*:\s]+(https?://[^\s<>"\'\);]+)', content, re.IGNORECASE)
+        u_m = re.search(r'(?:URL|Link)[*:\s]+(?:\[[^\]]*\]\()?(https?://[^\s<>"\'\)\];,]+)', content, re.IGNORECASE)
         if u_m:
-            u_val = u_m.group(1).strip()
+            u_val = u_m.group(1).strip().rstrip(".")
             if u_val not in text_urls:
                 text_urls.append(u_val)
 
-        for u in re.findall(r'https?://[^\s<>"\'\);]+', content):
-            if u not in text_urls:
-                text_urls.append(u)
+        for u in re.findall(r'https?://[^\s<>"\'\)\];,]+', content):
+            u_clean = u.strip().rstrip(".")
+            if u_clean not in text_urls:
+                text_urls.append(u_clean)
 
         display_title = extracted_title
         if not display_title and grounding_pairs:
@@ -1452,11 +1647,17 @@ class CredibleSourceGenerator:
         keywords: str | list[str],
         model: str = "gemini-3.5-flash",
     ) -> dict[str, Any]:
-        """Fetches research paper citations for a single taxonomy node using Google Search grounding.
+        """Fetches research paper citations for a single taxonomy node using search grounding.
         Fails fast if the user-selected model encounters an error (no fallback to other models).
         """
-        prompt = self._generate_prompt(domain, category, topic, keywords)
         kw_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
+        provider = get_model_provider(model)
+        candidate_papers = (
+            self._search_academic_papers(domain, category, topic, kw_str)
+            if provider != "gemini"
+            else []
+        )
+        prompt = self._generate_prompt(domain, category, topic, keywords, candidate_papers=candidate_papers)
         req = GenerateContentRequest(
             prompt=prompt,
             metadata={
@@ -1464,9 +1665,10 @@ class CredibleSourceGenerator:
                 "category": category,
                 "topic": topic,
                 "keywords": kw_str,
+                "search_grounding_pairs": candidate_papers,
             },
         )
-        tools = [types.Tool(google_search=types.GoogleSearch())] if get_model_provider(model) == "gemini" else None
+        tools = self._get_search_tools_for_model(model)
         result = self._gemini_utils.generate_content(req, model=model, tools=tools, raise_for_status=True)
         if getattr(result, "error", None):
             raise GeminiBackendError(result.error, model=model)
@@ -1487,7 +1689,7 @@ class CredibleSourceGenerator:
         model: str = "gemini-3.5-flash",
         max_workers: int = 5,
     ) -> pd.DataFrame:
-        """Grounds all rows in taxonomy_df with credible research papers using Google Search.
+        """Grounds all rows in taxonomy_df with credible research papers using search grounding.
         Fails fast if the user-selected model encounters an error (no fallback to other models).
         """
         if taxonomy_df.empty:
@@ -1496,6 +1698,7 @@ class CredibleSourceGenerator:
         df_out = taxonomy_df.copy()
         requests = []
         row_indices = []
+        provider = get_model_provider(model)
 
         for idx, row in df_out.iterrows():
             category = str(row.get("level1", row.get("category", "")))
@@ -1503,7 +1706,12 @@ class CredibleSourceGenerator:
             kw = row.get("level3", row.get("keywords", ""))
             kw_str = ", ".join(kw) if isinstance(kw, list) else str(kw)
 
-            prompt = self._generate_prompt(domain, category, topic, kw_str)
+            candidate_papers = (
+                self._search_academic_papers(domain, category, topic, kw_str)
+                if provider != "gemini"
+                else []
+            )
+            prompt = self._generate_prompt(domain, category, topic, kw_str, candidate_papers=candidate_papers)
             req = GenerateContentRequest(
                 prompt=prompt,
                 metadata={
@@ -1511,12 +1719,13 @@ class CredibleSourceGenerator:
                     "category": category,
                     "topic": topic,
                     "keywords": kw_str,
+                    "search_grounding_pairs": candidate_papers,
                 },
             )
             requests.append(req)
             row_indices.append(idx)
 
-        tools = [types.Tool(google_search=types.GoogleSearch())] if get_model_provider(model) == "gemini" else None
+        tools = self._get_search_tools_for_model(model)
         batch_res = self._gemini_utils.generate_content_batch(
             requests,
             model=model,

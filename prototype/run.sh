@@ -111,7 +111,7 @@ WANT_CLAUDE=0
 # Allow key via first command line argument: ./run.sh <key> (defaults to Gemini key)
 if [ -n "$1" ]; then
     export GEMINI_API_KEY="$1"
-    export GOOGLE_API_KEY="$1"
+    unset GOOGLE_API_KEY
     WANT_GEMINI=1
     echo "  ↳ Using Gemini API key passed via argument."
 fi
@@ -166,7 +166,7 @@ if [ "$WANT_GEMINI" -eq 1 ]; then
     fi
     if [ -n "$CURRENT_GEMINI" ]; then
         export GEMINI_API_KEY="$CURRENT_GEMINI"
-        export GOOGLE_API_KEY="$CURRENT_GEMINI"
+        unset GOOGLE_API_KEY
     fi
 fi
 
