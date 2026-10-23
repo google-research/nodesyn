@@ -58,10 +58,9 @@ PROVIDER_MODELS = {
         ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
     ],
     "openai": [
-        ("gpt-4o", "GPT-4o"),
-        ("gpt-4o-mini", "GPT-4o Mini"),
-        ("o3-mini", "o3-mini"),
-        ("o1", "o1"),
+        ("gpt-6-luna", "GPT-6 Luna"),
+        ("gpt-6.1-sol", "GPT-6.1 Sol"),
+        ("gpt-5.4-nano", "GPT-5.4 nano"),
     ],
     "anthropic": [
         ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
@@ -161,10 +160,9 @@ def get_evaluation_model_options() -> dict[str, tuple[str, str]]:
         options["Gemini 3.1 Flash-Lite (Google)"] = ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite")
 
     if "openai" in active:
-        options["GPT-4o (OpenAI)"] = ("gpt-4o", "GPT-4o")
-        options["GPT-4o Mini (OpenAI)"] = ("gpt-4o-mini", "GPT-4o Mini")
-        options["o3-mini (OpenAI)"] = ("o3-mini", "o3-mini")
-        options["o1 (OpenAI)"] = ("o1", "o1")
+        options["GPT-6 Luna (OpenAI)"] = ("gpt-6-luna", "GPT-6 Luna")
+        options["GPT-6.1 Sol (OpenAI)"] = ("gpt-6.1-sol", "GPT-6.1 Sol")
+        options["GPT-5.4 nano (OpenAI)"] = ("gpt-5.4-nano", "GPT-5.4 nano")
 
     if "anthropic" in active:
         options["Claude Sonnet 4.6 (Anthropic)"] = ("claude-sonnet-4-6", "Claude Sonnet 4.6")
@@ -186,9 +184,9 @@ def get_autorater_judge_options() -> dict[str, str]:
         options["Gemini 3.5 Flash (Google) - Capable Judge"] = "gemini-3.5-flash"
         options["Gemini 3.1 Flash-Lite (Google) - High Speed Judge"] = "gemini-3.1-flash-lite"
     if "openai" in active:
-        options["GPT-4o (OpenAI Judge)"] = "gpt-4o"
-        options["GPT-4o Mini (OpenAI)"] = "gpt-4o-mini"
-        options["o3-mini (OpenAI Fast Reasoning)"] = "o3-mini"
+        options["GPT-6 Luna (OpenAI Judge)"] = "gpt-6-luna"
+        options["GPT-6.1 Sol (OpenAI Judge)"] = "gpt-6.1-sol"
+        options["GPT-5.4 nano (OpenAI Fast Judge)"] = "gpt-5.4-nano"
     if "anthropic" in active:
         options["Claude Sonnet 4.6 (Anthropic Judge)"] = "claude-sonnet-4-6"
         options["Claude Sonnet 4.5 (Anthropic)"] = "claude-sonnet-4-5"
@@ -929,6 +927,18 @@ def get_bg_eval_store() -> dict[str, Any]:
         "error": None,
         "mode": "initial",  # "initial" | "more"
         "cancel_event": threading.Event(),
+        "start_time": 0.0,
+        "completed_queries": 0,
+        "total_queries": 0,
+        "model_completed": 0,
+        "model_total": 0,
+        "current_model": "",
+        "model_index": 1,
+        "total_models": 1,
+        "stage": "idle",
+        "in_flight_queries": [],
+        "recent_events": [],
+        "partial_rows": [],
     }
 
 
@@ -2691,30 +2701,49 @@ elif st.session_state.step == "Evaluation":
                             st.session_state.pop("last_eval_error", None)
                             current_keys = get_app_api_keys()
                             eval_batch_df = prompts_eval_df.copy()
-                            should_pad_50 = (not has_filtered_source) and (len(eval_batch_df) < 50) and (not source_df.empty)
+                            should_pad_50 = eval_batch_df.empty and (not source_df.empty)
                             saved_concept_val = st.session_state.get('saved_concept', 'Medical Advice')
                             saved_countries_val = st.session_state.get('saved_countries', ['Global'])
                             saved_def_val = st.session_state.get('saved_definition', '')
                             prompt_model_val = st.session_state.get("active_tax_model", "gemini-3.5-flash")
                             source_df_copy = source_df.copy()
                             models_copy = list(target_model_tuples)
-                            max_q_val = len(eval_batch_df) if has_filtered_source else 50
+                            max_q_val = len(eval_batch_df) if not eval_batch_df.empty else 50
+                            total_expected_q = max(len(eval_batch_df), 1) * max(len(models_copy), 1)
+                            initial_sample_queries = (
+                                [str(x).strip() for x in eval_batch_df["prompts"].head(5).tolist() if str(x).strip()]
+                                if "prompts" in eval_batch_df.columns
+                                else []
+                            )
 
                             bg_cancel_ev = threading.Event()
                             bg_store["cancel_event"] = bg_cancel_ev
                             bg_store["status"] = "running"
-                            bg_store["progress"] = 0.02
-                            bg_store["message"] = "Starting model response generation..."
+                            bg_store["progress"] = 0.04
+                            bg_store["message"] = f"Dispatching {len(eval_batch_df)} queries to {models_copy[0][1]} across 5 parallel workers..."
                             bg_store["result_df"] = None
                             bg_store["more_prompts_df"] = None
                             bg_store["error"] = None
                             bg_store["mode"] = "initial"
+                            bg_store["start_time"] = time.time()
+                            bg_store["completed_queries"] = 0
+                            bg_store["total_queries"] = total_expected_q
+                            bg_store["model_completed"] = 0
+                            bg_store["model_total"] = max(len(eval_batch_df), 1)
+                            bg_store["current_model"] = models_copy[0][1] if models_copy else "Gemini 3.5 Flash"
+                            bg_store["model_index"] = 1
+                            bg_store["total_models"] = max(len(models_copy), 1)
+                            bg_store["stage"] = "dispatching"
+                            bg_store["in_flight_queries"] = initial_sample_queries
+                            bg_store["recent_events"] = []
+                            bg_store["partial_rows"] = []
 
                             def _run_eval_in_background():
                                 try:
                                     batch_df = eval_batch_df
                                     if should_pad_50:
-                                        bg_store["message"] = "Synthesizing additional benchmark queries to reach 50 prompts..."
+                                        bg_store["stage"] = "synthesizing"
+                                        bg_store["message"] = "Synthesizing benchmark queries from taxonomy..."
                                         needed = 50 - len(batch_df)
                                         num_per_row = max(2, math.ceil(needed / max(len(source_df_copy), 1)))
                                         more_prompts_df = generate_dynamic_prompts(
@@ -2742,10 +2771,44 @@ elif st.session_state.step == "Evaluation":
                                                         "country": r.get("extracted_Country", "Global"),
                                                     })
                                             batch_df = pd.concat([batch_df, pd.DataFrame(new_rows)], ignore_index=True).drop_duplicates(subset=['prompts']).head(50)
+                                            bg_store["total_queries"] = max(len(batch_df), 1) * max(len(models_copy), 1)
+                                            bg_store["model_total"] = max(len(batch_df), 1)
+                                            bg_store["in_flight_queries"] = [
+                                                str(x).strip() for x in batch_df["prompts"].head(5).tolist() if str(x).strip()
+                                            ]
 
                                     def _bg_progress(pct, msg):
                                         bg_store["progress"] = float(pct)
                                         bg_store["message"] = str(msg)
+
+                                    def _bg_detail(info: dict[str, Any]):
+                                        bg_store["stage"] = info.get("stage", "streaming")
+                                        bg_store["completed_queries"] = int(info.get("completed_queries", 0))
+                                        bg_store["total_queries"] = int(info.get("total_queries", 1))
+                                        bg_store["model_completed"] = int(info.get("model_completed", 0))
+                                        bg_store["model_total"] = int(info.get("model_total", 1))
+                                        bg_store["current_model"] = str(info.get("current_model", ""))
+                                        bg_store["model_index"] = int(info.get("model_index", 1))
+                                        bg_store["total_models"] = int(info.get("total_models", 1))
+                                        latest_row = info.get("latest_row")
+                                        if isinstance(latest_row, dict) and latest_row.get("query"):
+                                            bg_store["partial_rows"].append(latest_row)
+                                            ev_item = {
+                                                "idx": bg_store["completed_queries"],
+                                                "model": latest_row.get("target_model", bg_store["current_model"]),
+                                                "category": latest_row.get("level2") or latest_row.get("level1") or "General",
+                                                "query": str(latest_row.get("query", "")),
+                                                "response": str(latest_row.get("response", "")),
+                                                "elapsed": max(0.1, time.time() - float(bg_store.get("start_time", time.time()))),
+                                            }
+                                            bg_store["recent_events"] = ([ev_item] + bg_store.get("recent_events", []))[:6]
+                                            rem_start = int(info.get("model_completed", 0))
+                                            if "prompts" in batch_df.columns:
+                                                bg_store["in_flight_queries"] = [
+                                                    str(x).strip()
+                                                    for x in batch_df["prompts"].iloc[rem_start : rem_start + 5].tolist()
+                                                    if str(x).strip()
+                                                ]
 
                                     eval_results_df = generate_dynamic_evaluations(
                                         prompts_df=batch_df,
@@ -2754,6 +2817,7 @@ elif st.session_state.step == "Evaluation":
                                         api_key=current_keys.get("gemini"),
                                         api_keys=current_keys,
                                         progress_callback=_bg_progress,
+                                        detail_callback=_bg_detail,
                                         cancel_event=bg_cancel_ev,
                                     )
                                     if bg_cancel_ev.is_set() or bg_store.get("status") == "stopped":
@@ -2761,6 +2825,7 @@ elif st.session_state.step == "Evaluation":
                                         return
                                     bg_store["result_df"] = eval_results_df
                                     bg_store["progress"] = 1.0
+                                    bg_store["stage"] = "completed"
                                     bg_store["message"] = "Evaluation complete!"
                                     bg_store["status"] = "completed"
                                 except GenerationCancelledError:
@@ -2776,16 +2841,112 @@ elif st.session_state.step == "Evaluation":
                             st.rerun()
 
                 if bg_store.get("status") == "running":
+                    elapsed_s = max(0.1, time.time() - float(bg_store.get("start_time") or time.time()))
+                    completed_q = int(bg_store.get("completed_queries", 0))
+                    total_q = max(int(bg_store.get("total_queries", n_display_queue)), 1)
+                    curr_model_name = str(bg_store.get("current_model") or "Selected Model")
+                    m_idx = int(bg_store.get("model_index", 1))
+                    m_total = max(int(bg_store.get("total_models", 1)), 1)
+                    m_done = int(bg_store.get("model_completed", 0))
+                    m_tot = max(int(bg_store.get("model_total", total_q)), 1)
+                    pct_float = min(max(float(bg_store.get("progress", 0.0)), 0.0), 1.0)
+                    pct_int = int(round((completed_q / total_q) * 100)) if completed_q > 0 else int(round(pct_float * 100))
+
+                    if completed_q > 0 and elapsed_s > 0.5:
+                        q_per_sec = completed_q / elapsed_s
+                        rem_q = max(0, total_q - completed_q)
+                        eta_s = rem_q / max(q_per_sec, 0.05)
+                        speed_main = f"{q_per_sec:.1f} q/sec"
+                        eta_sub = f"~{int(round(eta_s))}s remaining" if rem_q > 0 else "Finishing up..."
+                    else:
+                        speed_main = "5x Parallel"
+                        eta_sub = "Awaiting first batch response..."
+
+                    # Stage indicators
+                    st_prep_bg, st_prep_fg = "#dcfce7", "#166534"
+                    st_disp_bg, st_disp_fg = ("#dcfce7", "#166534") if completed_q > 0 else ("#dbeafe", "#1e40af")
+                    st_strm_bg, st_strm_fg = ("#dbeafe", "#1e40af") if completed_q > 0 else ("#f1f5f9", "#64748b")
+
                     st.markdown(
-                        """<div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 0.9rem 1.1rem; margin-top: 0.75rem; margin-bottom: 0.5rem;">
-                        <span style="color: #1d4ed8; font-size: 0.88rem; font-weight: 600;">⏳ Generating model responses in the background — you can switch to other tabs and return here anytime to check progress, or click Stop below.</span>
-                        </div>""",
+                        f"""
+<style>
+@keyframes evalPulse {{
+  0% {{ opacity: 1; transform: scale(1); }}
+  50% {{ opacity: 0.45; transform: scale(1.18); }}
+  100% {{ opacity: 1; transform: scale(1); }}
+}}
+.eval-pulse-dot {{
+  width: 10px; height: 10px; border-radius: 50%; background: #2563eb;
+  display: inline-block; animation: evalPulse 1.3s infinite ease-in-out;
+}}
+</style>
+<div style="background: linear-gradient(135deg, #eff6ff 0%, #f5f3ff 100%); border: 1px solid #bfdbfe; border-radius: 14px; padding: 1.25rem 1.5rem; margin-top: 0.85rem; margin-bottom: 0.85rem; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.06);">
+  <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem;">
+    <div style="display: flex; align-items: center; gap: 0.65rem;">
+      <span class="eval-pulse-dot"></span>
+      <span style="color: #1e3a8a; font-size: 0.98rem; font-weight: 800; font-family: 'Inter', sans-serif;">
+        Live Model Evaluation in Progress — {curr_model_name}
+      </span>
+      <span style="background: #dbeafe; color: #1d4ed8; font-size: 0.75rem; font-weight: 700; padding: 3px 10px; border-radius: 999px;">
+        5 Concurrent Workers Active
+      </span>
+    </div>
+    <div style="color: #475569; font-size: 0.82rem; font-weight: 600;">
+      💡 Runs in background — you can switch tabs anytime
+    </div>
+  </div>
+
+  <!-- 4 Live Telemetry Counter Cards -->
+  <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin-bottom: 1rem;">
+    <div style="background: white; border: 1px solid #dbeafe; border-radius: 10px; padding: 0.75rem 1rem;">
+      <div style="font-size: 0.7rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Queries Completed</div>
+      <div style="font-size: 1.35rem; font-weight: 800; color: #0f172a; margin-top: 2px;">{completed_q} <span style="font-size: 0.9rem; color: #64748b; font-weight: 600;">/ {total_q} ({pct_int}%)</span></div>
+      <div style="font-size: 0.75rem; color: #2563eb; font-weight: 600; margin-top: 2px;">{max(0, total_q - completed_q)} remaining in queue</div>
+    </div>
+    <div style="background: white; border: 1px solid #dbeafe; border-radius: 10px; padding: 0.75rem 1rem;">
+      <div style="font-size: 0.7rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Active Target Model</div>
+      <div style="font-size: 1.1rem; font-weight: 800; color: #4f46e5; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{curr_model_name}</div>
+      <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; margin-top: 3px;">Model {m_idx} of {m_total} ({m_done}/{m_tot} done)</div>
+    </div>
+    <div style="background: white; border: 1px solid #dbeafe; border-radius: 10px; padding: 0.75rem 1rem;">
+      <div style="font-size: 0.7rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Elapsed Time</div>
+      <div style="font-size: 1.35rem; font-weight: 800; color: #0f172a; margin-top: 2px;">⏱️ {elapsed_s:.1f}s</div>
+      <div style="font-size: 0.75rem; color: #059669; font-weight: 600; margin-top: 2px;">Live heartbeat active</div>
+    </div>
+    <div style="background: white; border: 1px solid #dbeafe; border-radius: 10px; padding: 0.75rem 1rem;">
+      <div style="font-size: 0.7rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Throughput &amp; ETA</div>
+      <div style="font-size: 1.25rem; font-weight: 800; color: #0f172a; margin-top: 2px;">⚡ {speed_main}</div>
+      <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; margin-top: 2px;">{eta_sub}</div>
+    </div>
+  </div>
+
+  <!-- Pipeline Stepper Pills -->
+  <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+    <span style="background: {st_prep_bg}; color: {st_prep_fg}; font-size: 0.76rem; font-weight: 700; padding: 4px 10px; border-radius: 6px;">
+      ✓ 1. Queue Prepared ({total_q} queries)
+    </span>
+    <span style="color: #94a3b8;">➔</span>
+    <span style="background: {st_disp_bg}; color: {st_disp_fg}; font-size: 0.76rem; font-weight: 700; padding: 4px 10px; border-radius: 6px;">
+      {'✓' if completed_q > 0 else '🔄'} 2. Parallel Batch Dispatched (5 workers)
+    </span>
+    <span style="color: #94a3b8;">➔</span>
+    <span style="background: {st_strm_bg}; color: {st_strm_fg}; font-size: 0.76rem; font-weight: 700; padding: 4px 10px; border-radius: 6px;">
+      {'🔄' if completed_q > 0 else '⏳'} 3. Streaming Responses ({completed_q}/{total_q})
+    </span>
+    <span style="color: #94a3b8;">➔</span>
+    <span style="background: #f1f5f9; color: #64748b; font-size: 0.76rem; font-weight: 700; padding: 4px 10px; border-radius: 6px;">
+      ⏳ 4. Finalize Evaluation Table
+    </span>
+  </div>
+</div>
+""",
                         unsafe_allow_html=True,
                     )
+
                     col_eval_prog, col_eval_stop = st.columns([4, 1.2])
                     with col_eval_prog:
-                        st.progress(min(max(float(bg_store.get("progress", 0.0)), 0.0), 1.0))
-                        st.markdown(f"**Status:** {bg_store.get('message', 'Running evaluation...')}")
+                        st.progress(pct_float)
+                        st.markdown(f"**Live Step:** {bg_store.get('message', 'Running evaluation...')}")
                     with col_eval_stop:
                         st.button(
                             "⏹️ Stop Evaluation",
@@ -2793,7 +2954,72 @@ elif st.session_state.step == "Evaluation":
                             on_click=stop_bg_evaluation,
                             use_container_width=True,
                         )
-                    time.sleep(0.8)
+
+                    # Show Live Activity Feed (In-Flight queries or Latest Completed Responses)
+                    recent_evs = bg_store.get("recent_events", [])
+                    in_flight_qs = bg_store.get("in_flight_queries", [])
+                    if recent_evs:
+                        feed_items_html = ""
+                        for ev in recent_evs[:3]:
+                            q_txt = str(ev.get("query", "")).replace("<", "&lt;").replace(">", "&gt;")
+                            r_txt = str(ev.get("response", "")).replace("<", "&lt;").replace(">", "&gt;")
+                            if len(q_txt) > 110:
+                                q_txt = q_txt[:110] + "..."
+                            if len(r_txt) > 160:
+                                r_txt = r_txt[:160] + "..."
+                            cat_txt = str(ev.get("category", "General")).replace("<", "&lt;").replace(">", "&gt;")
+                            feed_items_html += f"""
+<div style="background: white; border: 1px solid #e2e8f0; border-left: 3px solid #10b981; border-radius: 8px; padding: 0.55rem 0.85rem; margin-bottom: 0.45rem;">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+    <span style="font-size: 0.75rem; font-weight: 700; color: #059669;">✓ Query #{ev.get('idx')} Completed • {ev.get('model')}</span>
+    <span style="background: #f1f5f9; color: #475569; font-size: 0.7rem; font-weight: 600; padding: 1px 8px; border-radius: 999px;">{cat_txt}</span>
+  </div>
+  <div style="font-size: 0.8rem; color: #1e293b; font-weight: 600;">Q: "{q_txt}"</div>
+  <div style="font-size: 0.78rem; color: #64748b; margin-top: 2px;">A: {r_txt}</div>
+</div>"""
+                        st.markdown(
+                            f"""<div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.75rem 1rem; margin-top: 0.5rem; margin-bottom: 0.75rem;">
+                            <div style="font-size: 0.74rem; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;">📡 Latest Completed Model Responses</div>
+                            {feed_items_html}
+                            </div>""",
+                            unsafe_allow_html=True,
+                        )
+                    elif in_flight_qs:
+                        flight_html = "".join(
+                            f'<li style="margin-bottom: 4px; color: #334155; font-size: 0.82rem;">'
+                            f'<span style="color: #2563eb; font-weight: 700;">[Worker #{idx+1}]</span> '
+                            f'"{str(q).replace("<", "&lt;").replace(">", "&gt;")[:120]}{"..." if len(str(q)) > 120 else ""}"</li>'
+                            for idx, q in enumerate(in_flight_qs[:5])
+                        )
+                        st.markdown(
+                            f"""<div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.75rem 1rem; margin-top: 0.5rem; margin-bottom: 0.75rem;">
+                            <div style="font-size: 0.74rem; font-weight: 800; color: #2563eb; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem;">🔄 Active Queries Currently Being Generated by {curr_model_name} (Batch 1)</div>
+                            <ul style="margin: 0; padding-left: 1.1rem; list-style-type: none;">{flight_html}</ul>
+                            </div>""",
+                            unsafe_allow_html=True,
+                        )
+
+                    # Live streaming table of partial responses received so far
+                    partial_list = bg_store.get("partial_rows", [])
+                    if partial_list:
+                        with st.expander(f"📋 View Live Incoming Responses Table ({len(partial_list)} of {total_q} received so far)", expanded=True):
+                            live_df = pd.DataFrame(partial_list)[["query", "response", "target_model"]].copy()
+                            live_df = live_df.rename(columns={"target_model": "model name"})
+                            live_df.insert(0, "#", list(range(1, len(live_df) + 1)))
+                            st.dataframe(
+                                live_df.iloc[::-1],
+                                use_container_width=True,
+                                height=260,
+                                hide_index=True,
+                                column_config={
+                                    "#": st.column_config.NumberColumn("#", width="small"),
+                                    "query": st.column_config.TextColumn("Query", width="large"),
+                                    "response": st.column_config.TextColumn("Model Response", width="large"),
+                                    "model name": st.column_config.TextColumn("Model Name", width="medium"),
+                                },
+                            )
+
+                    time.sleep(0.6)
                     st.rerun()
 
                 if st.session_state.get("last_eval_error"):
@@ -2905,17 +3131,30 @@ elif st.session_state.step == "Evaluation":
                             bg_cancel_ev = threading.Event()
                             bg_store["cancel_event"] = bg_cancel_ev
                             bg_store["status"] = "running"
-                            bg_store["progress"] = 0.02
+                            bg_store["progress"] = 0.04
                             bg_store["message"] = "Synthesizing & evaluating +25 additional queries..."
                             bg_store["result_df"] = None
                             bg_store["more_prompts_df"] = None
                             bg_store["error"] = None
                             bg_store["mode"] = "more"
+                            bg_store["start_time"] = time.time()
+                            bg_store["completed_queries"] = 0
+                            bg_store["total_queries"] = 25 * max(len(models_copy), 1)
+                            bg_store["model_completed"] = 0
+                            bg_store["model_total"] = 25
+                            bg_store["current_model"] = models_copy[0][1] if models_copy else "Gemini 3.5 Flash"
+                            bg_store["model_index"] = 1
+                            bg_store["total_models"] = max(len(models_copy), 1)
+                            bg_store["stage"] = "dispatching"
+                            bg_store["in_flight_queries"] = []
+                            bg_store["recent_events"] = []
+                            bg_store["partial_rows"] = []
 
                             def _run_more_eval_in_background():
                                 try:
                                     uneval_list = list(unevaluated)
                                     if len(uneval_list) < 25:
+                                        bg_store["stage"] = "synthesizing"
                                         more_prompts_df = generate_dynamic_prompts(
                                             taxonomy_df=demo_df_copy,
                                             domain=saved_concept_val,
@@ -2946,6 +3185,41 @@ elif st.session_state.step == "Evaluation":
 
                                     batch_to_eval = pd.DataFrame(uneval_list).drop_duplicates(subset=['prompts']).head(25)
                                     if not batch_to_eval.empty:
+                                        bg_store["total_queries"] = max(len(batch_to_eval), 1) * max(len(models_copy), 1)
+                                        bg_store["model_total"] = max(len(batch_to_eval), 1)
+                                        bg_store["in_flight_queries"] = [
+                                            str(x).strip() for x in batch_to_eval["prompts"].head(5).tolist() if str(x).strip()
+                                        ]
+
+                                        def _bg_more_detail(info: dict[str, Any]):
+                                            bg_store["stage"] = info.get("stage", "streaming")
+                                            bg_store["completed_queries"] = int(info.get("completed_queries", 0))
+                                            bg_store["total_queries"] = int(info.get("total_queries", 1))
+                                            bg_store["model_completed"] = int(info.get("model_completed", 0))
+                                            bg_store["model_total"] = int(info.get("model_total", 1))
+                                            bg_store["current_model"] = str(info.get("current_model", ""))
+                                            bg_store["model_index"] = int(info.get("model_index", 1))
+                                            bg_store["total_models"] = int(info.get("total_models", 1))
+                                            latest_row = info.get("latest_row")
+                                            if isinstance(latest_row, dict) and latest_row.get("query"):
+                                                bg_store["partial_rows"].append(latest_row)
+                                                ev_item = {
+                                                    "idx": bg_store["completed_queries"],
+                                                    "model": latest_row.get("target_model", bg_store["current_model"]),
+                                                    "category": latest_row.get("level2") or latest_row.get("level1") or "General",
+                                                    "query": str(latest_row.get("query", "")),
+                                                    "response": str(latest_row.get("response", "")),
+                                                    "elapsed": max(0.1, time.time() - float(bg_store.get("start_time", time.time()))),
+                                                }
+                                                bg_store["recent_events"] = ([ev_item] + bg_store.get("recent_events", []))[:6]
+                                                rem_start = int(info.get("model_completed", 0))
+                                                if "prompts" in batch_to_eval.columns:
+                                                    bg_store["in_flight_queries"] = [
+                                                        str(x).strip()
+                                                        for x in batch_to_eval["prompts"].iloc[rem_start : rem_start + 5].tolist()
+                                                        if str(x).strip()
+                                                    ]
+
                                         new_eval_df = generate_dynamic_evaluations(
                                             prompts_df=batch_to_eval,
                                             target_models=models_copy,
@@ -2953,6 +3227,7 @@ elif st.session_state.step == "Evaluation":
                                             api_key=current_keys.get("gemini"),
                                             api_keys=current_keys,
                                             progress_callback=_bg_more_progress,
+                                            detail_callback=_bg_more_detail,
                                             cancel_event=bg_cancel_ev,
                                         )
                                         bg_store["result_df"] = new_eval_df
@@ -4098,11 +4373,12 @@ elif st.session_state.step == "Analysis":
         "Gemini Flash": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
         "Gemini 2.5 flash": {"line": "#4f46e5", "fill": "rgba(79,70,229,0.08)"},
         # OpenAI
+        "GPT-6 Luna": {"line": "#10b981", "fill": "rgba(16,185,129,0.08)"},
+        "GPT-6.1 Sol": {"line": "#059669", "fill": "rgba(5,150,105,0.08)"},
+        "GPT-5.4 nano": {"line": "#047857", "fill": "rgba(4,120,87,0.08)"},
         "GPT-4o": {"line": "#10b981", "fill": "rgba(16,185,129,0.08)"},
         "GPT-4o Mini": {"line": "#059669", "fill": "rgba(5,150,105,0.08)"},
         "GPT o4-mini": {"line": "#10b981", "fill": "rgba(16,185,129,0.08)"},
-        "o3-mini": {"line": "#047857", "fill": "rgba(4,120,87,0.08)"},
-        "o1": {"line": "#065f46", "fill": "rgba(6,95,70,0.08)"},
         # Claude
         "Claude Sonnet 4.6": {"line": "#d97706", "fill": "rgba(217,119,6,0.08)"},
         "Claude Sonnet 4.5": {"line": "#f59e0b", "fill": "rgba(245,158,11,0.08)"},

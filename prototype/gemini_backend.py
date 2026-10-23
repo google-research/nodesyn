@@ -8,6 +8,7 @@ import os
 import random
 import re
 import textwrap
+import threading
 import time
 from typing import Any
 import urllib.error
@@ -473,6 +474,7 @@ class MultiModelUtils:
         self._openai_client = None
         self._anthropic_client = None
         self._llama_client = None
+        self._client_lock = threading.Lock()
 
     def get_model_provider(self, model: str) -> str:
         return get_model_provider(model)
@@ -483,13 +485,17 @@ class MultiModelUtils:
         model: str,
         tools: list[Any] | None = None,
     ) -> tuple[str, Any]:
-        if not self._gemini_client:
-            g_key = self._api_keys.get("gemini") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-            if not g_key:
-                raise ValueError("No Gemini API Key provided. Set GEMINI_API_KEY environment variable or enter it in the UI.")
-            if "GEMINI_API_KEY" in os.environ and "GOOGLE_API_KEY" in os.environ:
-                os.environ.pop("GOOGLE_API_KEY", None)
-            self._gemini_client = genai.Client(api_key=g_key)
+        with self._client_lock:
+            if not self._gemini_client:
+                g_key = self._api_keys.get("gemini") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+                if not g_key:
+                    raise ValueError("No Gemini API Key provided. Set GEMINI_API_KEY environment variable or enter it in the UI.")
+                if "GEMINI_API_KEY" in os.environ and "GOOGLE_API_KEY" in os.environ:
+                    os.environ.pop("GOOGLE_API_KEY", None)
+                self._gemini_client = genai.Client(
+                    api_key=g_key,
+                    http_options=types.HttpOptions(timeout=45000),
+                )
 
         config_kwargs: dict[str, Any] = {
             "top_p": 0.95,
@@ -519,14 +525,26 @@ class MultiModelUtils:
         o_key = self._api_keys.get("openai") or os.environ.get("OPENAI_API_KEY")
         if not o_key:
             raise ValueError("No OpenAI API key provided. Set OPENAI_API_KEY environment variable or enter it in the UI.")
-        if not self._openai_client:
-            self._openai_client = openai.OpenAI(api_key=o_key)
+        with self._client_lock:
+            if not self._openai_client:
+                self._openai_client = openai.OpenAI(api_key=o_key, timeout=45.0)
+
+        openai_model_map = {
+            "o3-mini": "gpt-5.4-nano",
+            "o1": "gpt-6-luna",
+            "gpt-4o": "gpt-6-luna",
+            "gpt-4o-mini": "gpt-5.4-nano",
+            "gpt-6 luna": "gpt-6-luna",
+            "gpt-6.1 sol": "gpt-6.1-sol",
+            "gpt-5.4 nano": "gpt-5.4-nano",
+        }
+        resolved_model = openai_model_map.get(model.lower().strip(), model)
 
         if tools and hasattr(self._openai_client, "responses"):
             for search_tool_type in ("web_search_preview", "web_search"):
                 try:
                     resp = self._openai_client.responses.create(
-                        model=model,
+                        model=resolved_model,
                         input=prompt,
                         tools=[{"type": search_tool_type}],
                     )
@@ -544,18 +562,23 @@ class MultiModelUtils:
                     logging.debug(
                         "OpenAI responses web search (%s) unavailable for model [%s], falling back: %s",
                         search_tool_type,
-                        model,
+                        resolved_model,
                         e,
                     )
 
         kwargs: dict[str, Any] = {
-            "model": model,
+            "model": resolved_model,
             "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
         }
-        if not (model.startswith("o1") or model.startswith("o3")):
-            kwargs["temperature"] = 0.1
-
-        resp = self._openai_client.chat.completions.create(**kwargs)
+        try:
+            resp = self._openai_client.chat.completions.create(**kwargs)
+        except Exception as e:
+            if "temperature" in str(e).lower():
+                kwargs.pop("temperature", None)
+                resp = self._openai_client.chat.completions.create(**kwargs)
+            else:
+                raise
         text = resp.choices[0].message.content or ""
         return text, resp
 
@@ -570,8 +593,9 @@ class MultiModelUtils:
         a_key = self._api_keys.get("anthropic") or os.environ.get("ANTHROPIC_API_KEY")
         if not a_key:
             raise ValueError("No Anthropic API key provided. Set ANTHROPIC_API_KEY environment variable or enter it in the UI.")
-        if not self._anthropic_client:
-            self._anthropic_client = anthropic.Anthropic(api_key=a_key)
+        with self._client_lock:
+            if not self._anthropic_client:
+                self._anthropic_client = anthropic.Anthropic(api_key=a_key, timeout=45.0)
 
         claude_model_map = {
             "claude-3-7-sonnet-20250219": "claude-sonnet-4-6",
@@ -721,6 +745,7 @@ class MultiModelUtils:
         tools: list[dict[str, Any]] | None = None,
         max_workers: int = 5,
         raise_for_status: bool = True,
+        item_callback: Any = None,
     ) -> list[GenerateContentResult]:
         """Calls model generate_content in parallel across workers with fail-fast and cancellation semantics."""
         if not requests:
@@ -728,6 +753,7 @@ class MultiModelUtils:
         if self._cancel_event is not None and self._cancel_event.is_set():
             raise GenerationCancelledError("Generation stopped by user.")
 
+        total_requests = len(requests)
         results: list[GenerateContentResult] = []
         executor = futures.ThreadPoolExecutor(max_workers=max_workers)
         try:
@@ -736,6 +762,7 @@ class MultiModelUtils:
                 tasks_futures[executor.submit(self.generate_content, item, model, tools, False, True)] = item
 
             pending = set(tasks_futures.keys())
+            last_activity_time = time.time()
             while pending:
                 done, pending = futures.wait(pending, timeout=0.3, return_when=futures.FIRST_COMPLETED)
                 if self._cancel_event is not None and self._cancel_event.is_set():
@@ -745,6 +772,24 @@ class MultiModelUtils:
                 if self._heartbeat_callback is not None:
                     self._heartbeat_callback()
 
+                if not done:
+                    # Guard against an indefinitely stalled socket on remaining worker(s)
+                    if time.time() - last_activity_time > 50.0:
+                        for f in list(pending):
+                            req = tasks_futures[f]
+                            f.cancel()
+                            stalled_res = GenerateContentResult(req, "")
+                            results.append(stalled_res)
+                            if item_callback is not None:
+                                try:
+                                    item_callback(len(results), total_requests, stalled_res)
+                                except Exception:
+                                    pass
+                        pending.clear()
+                        break
+                    continue
+
+                last_activity_time = time.time()
                 for future in done:
                     req = tasks_futures[future]
                     try:
@@ -755,6 +800,11 @@ class MultiModelUtils:
                                 f.cancel()
                             logging.error("Fail-fast triggered in batch for model %s: %s", model, result.error)
                             raise GeminiBackendError(result.error, model=model)
+                        if item_callback is not None:
+                            try:
+                                item_callback(len(results), total_requests, result)
+                            except Exception:
+                                pass
                     except (GeminiBackendError, GenerationCancelledError):
                         raise
                     except Exception as e:
@@ -763,7 +813,13 @@ class MultiModelUtils:
                             for f in tasks_futures:
                                 f.cancel()
                             raise GeminiBackendError(e, model=model)
-                        results.append(GenerateContentResult(req, "", error=str(e)))
+                        err_res = GenerateContentResult(req, "", error=str(e))
+                        results.append(err_res)
+                        if item_callback is not None:
+                            try:
+                                item_callback(len(results), total_requests, err_res)
+                            except Exception:
+                                pass
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 
@@ -1959,6 +2015,7 @@ class ModelEvaluationGenerator:
         model_name: str = "gemini-3.5-flash",
         display_model_name: str = "Gemini 3.5 Flash",
         max_prompts: int = 50,
+        item_callback: Any = None,
     ) -> pd.DataFrame:
         df_subset = prompts_df.head(max_prompts)
         requests = []
@@ -1987,20 +2044,12 @@ class ModelEvaluationGenerator:
             )
             requests.append(req)
 
-        batch_results = self._gemini_utils.generate_content_batch(
-            requests,
-            model=model_name,
-            max_workers=5
-        )
-
-        rows = []
-        for res in batch_results:
+        def _format_row(res: GenerateContentResult) -> dict[str, str]:
             meta = res.request.metadata
             response_text = res.generated_content.strip()
             if not response_text:
                 response_text = f"I am an AI assistant adhering to domain safety guidelines for {meta.get('level2', 'this query')}. I provide structured, neutral, and helpful guidance."
-
-            rows.append({
+            return {
                 "query": meta["query"],
                 "response": response_text,
                 "target_model": meta["target_model"],
@@ -2010,8 +2059,20 @@ class ModelEvaluationGenerator:
                 "level3": meta.get("level3", ""),
                 "country": meta.get("country", "Global"),
                 "model_modality": meta.get("model_modality", "text-to-text"),
-            })
+            }
 
+        def _on_batch_item(done_cnt: int, total_cnt: int, res: GenerateContentResult):
+            if item_callback is not None:
+                item_callback(done_cnt, total_cnt, _format_row(res))
+
+        batch_results = self._gemini_utils.generate_content_batch(
+            requests,
+            model=model_name,
+            max_workers=5,
+            item_callback=_on_batch_item,
+        )
+
+        rows = [_format_row(res) for res in batch_results]
         return pd.DataFrame(rows)
 
 
@@ -2022,33 +2083,93 @@ def generate_dynamic_evaluations(
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
     progress_callback: Any = None,
+    detail_callback: Any = None,
     cancel_event: Any = None,
     heartbeat_callback: Any = None,
 ) -> pd.DataFrame:
-    """Executes parallel evaluation calls across selected models."""
+    """Executes parallel evaluation calls across selected models with real-time per-query telemetry."""
+    df_subset = prompts_df.head(max_prompts)
+    n_queries_per_model = len(df_subset)
+    total_models = max(len(target_models), 1)
+    total_queries_all = max(n_queries_per_model * total_models, 1)
+
     if progress_callback:
-        progress_callback(0.1, "Initializing evaluation client...")
+        progress_callback(0.03, f"Initializing evaluation pipeline for {n_queries_per_model} queries across {len(target_models)} model(s)...")
+
     client = MultiModelUtils(api_key=api_key, api_keys=api_keys, cancel_event=cancel_event, heartbeat_callback=heartbeat_callback)
     evaluator = ModelEvaluationGenerator(client)
     
     all_evals = []
-    total = len(target_models)
+    global_completed = 0
+
     for i, (model_id, display_name) in enumerate(target_models):
         if cancel_event is not None and cancel_event.is_set():
             raise GenerationCancelledError("Generation stopped by user.")
+
+        base_completed = global_completed
+        start_pct = max(0.05, min(0.95, base_completed / total_queries_all))
         if progress_callback:
-            pct = 0.2 + (0.7 * ((i + 1) / max(total, 1)))
-            progress_callback(pct, f"Generating evaluation responses from {display_name} (batch of {max_prompts} queries)...")
+            progress_callback(
+                start_pct,
+                f"[{display_name}] Dispatching {n_queries_per_model} queries across 5 parallel workers (0/{n_queries_per_model} completed)...",
+            )
+        if detail_callback:
+            try:
+                detail_callback({
+                    "stage": "dispatching",
+                    "completed_queries": base_completed,
+                    "total_queries": total_queries_all,
+                    "model_completed": 0,
+                    "model_total": n_queries_per_model,
+                    "current_model": display_name,
+                    "model_id": model_id,
+                    "model_index": i + 1,
+                    "total_models": total_models,
+                    "latest_row": None,
+                })
+            except Exception:
+                pass
+
+        def _handle_item_done(done_in_model: int, total_in_model: int, row_dict: dict[str, str], _m_idx=i, _m_name=display_name, _m_id=model_id, _base=base_completed):
+            curr_global = _base + done_in_model
+            pct = min(0.98, max(0.06, curr_global / total_queries_all))
+            q_preview = str(row_dict.get("query", ""))[:65]
+            if len(str(row_dict.get("query", ""))) > 65:
+                q_preview += "..."
+            if progress_callback:
+                progress_callback(
+                    pct,
+                    f"[{_m_name}] Completed {done_in_model}/{total_in_model} queries ({int(pct * 100)}%) — Latest: \"{q_preview}\"",
+                )
+            if detail_callback:
+                try:
+                    detail_callback({
+                        "stage": "streaming",
+                        "completed_queries": curr_global,
+                        "total_queries": total_queries_all,
+                        "model_completed": done_in_model,
+                        "model_total": total_in_model,
+                        "current_model": _m_name,
+                        "model_id": _m_id,
+                        "model_index": _m_idx + 1,
+                        "total_models": total_models,
+                        "latest_row": row_dict,
+                    })
+                except Exception:
+                    pass
+
         df_model = evaluator.evaluate(
             prompts_df=prompts_df,
             model_name=model_id,
             display_model_name=display_name,
             max_prompts=max_prompts,
+            item_callback=_handle_item_done,
         )
+        global_completed += len(df_model)
         all_evals.append(df_model)
 
     if progress_callback:
-        progress_callback(1.0, "Model evaluation responses generated successfully!")
+        progress_callback(1.0, f"Successfully generated {global_completed} model evaluation responses!")
 
     if all_evals:
         return pd.concat(all_evals, ignore_index=True)
@@ -2067,6 +2188,7 @@ class AutoraterJudgeGenerator:
         rubric_template: str,
         judge_model_name: str = "gemini-3.5-flash",
         max_rows: int | None = None,
+        item_callback: Any = None,
     ) -> pd.DataFrame:
         if max_rows and max_rows > 0:
             df_subset = eval_df.head(max_rows)
@@ -2101,7 +2223,8 @@ class AutoraterJudgeGenerator:
         batch_results = self._gemini_utils.generate_content_batch(
             requests,
             model=judge_model_name,
-            max_workers=5
+            max_workers=5,
+            item_callback=item_callback,
         )
 
         rows = []
@@ -2141,16 +2264,24 @@ def generate_dynamic_autoratings(
     """Executes parallel autorater judgments for evaluation responses."""
     target_count = len(eval_df) if (max_rows is None or max_rows <= 0) else min(len(eval_df), max_rows)
     if progress_callback:
-        progress_callback(0.2, f"Initializing Autorater Judge model for {target_count} responses...")
+        progress_callback(0.05, f"Initializing Autorater Judge ({judge_model_name}) for {target_count} responses...")
     client = MultiModelUtils(api_key=api_key, api_keys=api_keys, cancel_event=cancel_event, heartbeat_callback=heartbeat_callback)
     judge = AutoraterJudgeGenerator(client)
     if progress_callback:
-        progress_callback(0.5, f"Rating all {target_count} model responses against rubric in parallel...")
+        progress_callback(0.10, f"Dispatching {target_count} responses to {judge_model_name} (0/{target_count} rated)...")
+
+    def _on_rated(done_cnt: int, total_cnt: int, res: GenerateContentResult):
+        if progress_callback:
+            pct = min(0.98, 0.10 + 0.88 * (done_cnt / max(total_cnt, 1)))
+            lbl = res.generated_content.strip().split("\n")[0].strip(' *"`')[:40]
+            progress_callback(pct, f"Rated {done_cnt}/{total_cnt} responses ({int(pct * 100)}%) — Latest verdict: {lbl or 'Rated'}")
+
     rated_df = judge.rate(
         eval_df=eval_df,
         rubric_template=rubric_template,
         judge_model_name=judge_model_name,
         max_rows=max_rows,
+        item_callback=_on_rated,
     )
     if progress_callback:
         progress_callback(1.0, f"Successfully rated {len(rated_df)} responses!")

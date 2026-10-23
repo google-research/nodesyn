@@ -1,6 +1,6 @@
 # NodeSyn: Socially Aligned Synthetic Data for AI Evaluation
 
-🚀 [**Launch Live Prototype**](https://support-tickets-29m1bnjrfkk.streamlit.app/#end-to-end-workflow)
+🚀 [**Launch Live Prototype**](https://nodesyn.streamlit.app/)
 
 **NodeSyn** is a research prototype that implements a scalable, multi-stage methodology for creating socially relevant and evidence-grounded synthetic data (e.g., annotated queries) for AI model evaluation. 
 
@@ -23,7 +23,7 @@ Standard benchmarks and manual query creation struggle to capture real-world soc
 
 ## 🔄 End-to-End Workflow
 
-You can explore the full workflow directly in our [**Live Prototype**](https://support-tickets-29m1bnjrfkk.streamlit.app/#end-to-end-workflow):
+You can explore the full workflow directly in our [**Live Prototype**](https://nodesyn.streamlit.app/):
 
 1. **Concept Setup:** Define the overarching theme (e.g., "Cultural Bias", "Medical Advice") and operational constraints (countries, languages, modality).
 2. **Taxonomy Generation:** The system leverages a fine-tuned taxonomy generator (TaG) to intelligently extrapolate a structured vocabulary (L1, L2, L3).
