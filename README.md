@@ -64,9 +64,11 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for details.
 
 ## How to run it on your own machine
 
-Navigate to the `prototype` directory (if starting from the repository root):
+Clone the repository, then navigate to the `prototype` directory:
 
 ```bash
+git clone https://github.com/google-research/nodesyn.git
+cd nodesyn
 cd prototype
 ```
 
