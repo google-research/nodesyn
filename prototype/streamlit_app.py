@@ -54,7 +54,7 @@ PROVIDER_ICONS = {
 
 PROVIDER_MODELS = {
     "gemini": [
-        ("gemini-3.5-flash", "Gemini 3.5 Flash"),
+        ("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite"),
         ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
     ],
     "openai": [
@@ -141,7 +141,7 @@ def get_selectable_taxonomy_models() -> dict[str, str]:
     active = get_active_providers_list()
     options = {}
     if not active:
-        options["Gemini 3.5 Flash (Google - Recommended)"] = "gemini-3.5-flash"
+        options["Gemini 3.5 Flash-Lite (Google - Recommended)"] = "gemini-3.5-flash-lite"
         options["Gemini 3.1 Flash-Lite (Google - Fast)"] = "gemini-3.1-flash-lite"
         return options
     for p in active:
@@ -156,7 +156,7 @@ def get_evaluation_model_options() -> dict[str, tuple[str, str]]:
     options: dict[str, tuple[str, str]] = {}
 
     if "gemini" in active:
-        options["Gemini 3.5 Flash (Google)"] = ("gemini-3.5-flash", "Gemini 3.5 Flash")
+        options["Gemini 3.5 Flash-Lite (Google)"] = ("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite")
         options["Gemini 3.1 Flash-Lite (Google)"] = ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite")
 
     if "openai" in active:
@@ -171,7 +171,7 @@ def get_evaluation_model_options() -> dict[str, tuple[str, str]]:
         options["Claude Opus 4.6 (Anthropic)"] = ("claude-opus-4-6", "Claude Opus 4.6")
 
     if not options:
-        options["Gemini 3.5 Flash (Google)"] = ("gemini-3.5-flash", "Gemini 3.5 Flash")
+        options["Gemini 3.5 Flash-Lite (Google)"] = ("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite")
         options["Gemini 3.1 Flash-Lite (Google)"] = ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite")
         
     return options
@@ -181,7 +181,7 @@ def get_autorater_judge_options() -> dict[str, str]:
     active = [p for p in ["gemini", "openai", "anthropic"] if p in keys and keys[p]]
     options = {}
     if "gemini" in active:
-        options["Gemini 3.5 Flash (Google) - Capable Judge"] = "gemini-3.5-flash"
+        options["Gemini 3.5 Flash-Lite (Google) - Capable Judge"] = "gemini-3.5-flash-lite"
         options["Gemini 3.1 Flash-Lite (Google) - High Speed Judge"] = "gemini-3.1-flash-lite"
     if "openai" in active:
         options["GPT-4o mini (OpenAI Fast Judge)"] = "gpt-4o-mini"
@@ -194,7 +194,7 @@ def get_autorater_judge_options() -> dict[str, str]:
         options["Claude Opus 4.6 (Anthropic)"] = "claude-opus-4-6"
 
     if not options:
-        options["Gemini 3.5 Flash (Google) - Capable Judge"] = "gemini-3.5-flash"
+        options["Gemini 3.5 Flash-Lite (Google) - Capable Judge"] = "gemini-3.5-flash-lite"
         options["Gemini 3.1 Flash-Lite (Google) - High Speed Judge"] = "gemini-3.1-flash-lite"
     return options
 
@@ -279,7 +279,7 @@ def display_backend_error(
     col_btn, col_exp = st.columns([1.5, 2.5])
     with col_btn:
         if diag.get("category") == "MODEL_DEPRECATED":
-            rec_model = diag.get("recommended_model", "gemini-3.5-flash")
+            rec_model = diag.get("recommended_model", "gemini-3.5-flash-lite")
             rec_display = rec_model.replace("gemini-", "Gemini ").replace("-", " ").title()
             if st.button(f"⚡ Auto-Switch to {rec_display} & Retry", key=f"btn_switch_{rec_model}", type="primary", use_container_width=True):
                 # Update any stored model selections to recommended model
@@ -2503,7 +2503,7 @@ elif st.session_state.step == "Data":
                     try:
                         st.session_state.pop("last_prompt_error", None)
                         current_keys = get_app_api_keys()
-                        prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash")
+                        prompt_model = st.session_state.get("active_tax_model", "gemini-3.5-flash-lite")
                         new_prompts_df = generate_dynamic_prompts(
                             taxonomy_df=st.session_state.demo_data,
                             domain=concept_name,
@@ -2539,7 +2539,7 @@ elif st.session_state.step == "Data":
             display_backend_error(
                 st.session_state.last_prompt_error,
                 context="Synthetic Prompt Generation",
-                model=st.session_state.get("active_tax_model", "gemini-3.5-flash"),
+                model=st.session_state.get("active_tax_model", "gemini-3.5-flash-lite"),
                 retry_key="retry_prompt_gen_btn",
                 on_retry=lambda: st.session_state.pop("last_prompt_error", None),
             )
@@ -2705,7 +2705,7 @@ elif st.session_state.step == "Evaluation":
                             saved_concept_val = st.session_state.get('saved_concept', 'Medical Advice')
                             saved_countries_val = st.session_state.get('saved_countries', ['Global'])
                             saved_def_val = st.session_state.get('saved_definition', '')
-                            prompt_model_val = st.session_state.get("active_tax_model", "gemini-3.5-flash")
+                            prompt_model_val = st.session_state.get("active_tax_model", "gemini-3.5-flash-lite")
                             source_df_copy = source_df.copy()
                             models_copy = list(target_model_tuples)
                             max_q_val = len(eval_batch_df) if not eval_batch_df.empty else 50
@@ -2730,7 +2730,7 @@ elif st.session_state.step == "Evaluation":
                             bg_store["total_queries"] = total_expected_q
                             bg_store["model_completed"] = 0
                             bg_store["model_total"] = max(len(eval_batch_df), 1)
-                            bg_store["current_model"] = models_copy[0][1] if models_copy else "Gemini 3.5 Flash"
+                            bg_store["current_model"] = models_copy[0][1] if models_copy else "Gemini 3.5 Flash-Lite"
                             bg_store["model_index"] = 1
                             bg_store["total_models"] = max(len(models_copy), 1)
                             bg_store["stage"] = "dispatching"
@@ -3125,7 +3125,7 @@ elif st.session_state.step == "Evaluation":
                             saved_concept_val = st.session_state.get('saved_concept', 'Medical Advice')
                             saved_countries_val = st.session_state.get('saved_countries', ['Global'])
                             saved_def_val = st.session_state.get('saved_definition', '')
-                            prompt_model_val = st.session_state.get("active_tax_model", "gemini-3.5-flash")
+                            prompt_model_val = st.session_state.get("active_tax_model", "gemini-3.5-flash-lite")
                             models_copy = list(target_model_tuples)
 
                             bg_cancel_ev = threading.Event()
@@ -3142,7 +3142,7 @@ elif st.session_state.step == "Evaluation":
                             bg_store["total_queries"] = 25 * max(len(models_copy), 1)
                             bg_store["model_completed"] = 0
                             bg_store["model_total"] = 25
-                            bg_store["current_model"] = models_copy[0][1] if models_copy else "Gemini 3.5 Flash"
+                            bg_store["current_model"] = models_copy[0][1] if models_copy else "Gemini 3.5 Flash-Lite"
                             bg_store["model_index"] = 1
                             bg_store["total_models"] = max(len(models_copy), 1)
                             bg_store["stage"] = "dispatching"
@@ -4367,7 +4367,7 @@ elif st.session_state.step == "Analysis":
         "Gemini 3.8 Flash": {"line": "#4f46e5", "fill": "rgba(79,70,229,0.08)"},
         "Gemini 3.7 Flash": {"line": "#4338ca", "fill": "rgba(67,56,202,0.08)"},
         "Gemini 3.8 Live": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
-        "Gemini 3.5 Flash": {"line": "#818cf8", "fill": "rgba(129,140,248,0.08)"},
+        "Gemini 3.5 Flash-Lite": {"line": "#818cf8", "fill": "rgba(129,140,248,0.08)"},
         "Gemini 3.1 Flash-Lite": {"line": "#0ea5e9", "fill": "rgba(14,165,233,0.08)"},
         "Gemini Flash Latest": {"line": "#4f46e5", "fill": "rgba(79,70,229,0.08)"},
         "Gemini Flash": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},

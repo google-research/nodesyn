@@ -199,10 +199,10 @@ def parse_backend_error(
         # Extract suggested replacement model if mentioned by backend
         rec_match = re.search(r'(?:use|switch to|recommend(?:ed)?)\s+(?:models?/)?(gemini-[a-zA-Z0-9\.\-_]+)', unescaped_str, re.IGNORECASE)
         ALLOWED_GEMINI_MODELS = {
-            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
             "gemini-3.1-flash-lite",
         }
-        suggested_model = "gemini-3.5-flash"
+        suggested_model = "gemini-3.5-flash-lite"
         if rec_match:
             candidate = rec_match.group(1).lower()
             if candidate in ALLOWED_GEMINI_MODELS:
@@ -253,7 +253,7 @@ def parse_backend_error(
             "headline": "WebSocket-Only Streaming Model",
             "gist": "models/gemini-3.8-live only supports real-time bidirectional streaming via WebSocket (bidiGenerateContent).",
             "explanation": "Gemini 3.8 Live is designed for interactive audio/video sessions over WebSockets and does not support standard generateContent REST calls.",
-            "retry_action": "Please select Gemini 3.8 Flash, Gemini 3.7 Flash, Gemini 3.5 Flash, or Gemini 3.1 Flash-Lite.",
+            "retry_action": "Please select Gemini 3.5 Flash-Lite or Gemini 3.1 Flash-Lite.",
             "is_retryable": False,
             "raw_message": clean_text,
         }
@@ -293,7 +293,7 @@ def parse_backend_error(
             "headline": f"Model Endpoint Not Found (404){model_str}",
             "gist": f"The requested model endpoint '{model or 'specified'}' was not found or is not available for this API version.",
             "explanation": "The model identifier might be mistyped, decommissioned, or unavailable under the current API version (v1beta/v1) for your project.",
-            "retry_action": "Please select a standard supported model (such as Gemini 3.8 Flash or Gemini 3.7 Flash) in the model selector and try again.",
+            "retry_action": "Please select a standard supported model (such as Gemini 3.5 Flash-Lite or Gemini 3.1 Flash-Lite) in the model selector and try again.",
             "is_retryable": False,
             "raw_message": clean_text,
         }
@@ -681,7 +681,7 @@ class MultiModelUtils:
     def _execute_single_call(
         self,
         request: GenerateContentRequest,
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.5-flash-lite",
         tools: list[dict[str, Any] | types.Tool] | None = None,
         raise_for_status: bool = False,
     ) -> GenerateContentResult:
@@ -716,7 +716,7 @@ class MultiModelUtils:
     def generate_content(
         self,
         request: GenerateContentRequest,
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.5-flash-lite",
         tools: list[dict[str, Any] | types.Tool] | None = None,
         raise_for_status: bool = False,
         _in_batch: bool = False,
@@ -747,7 +747,7 @@ class MultiModelUtils:
     def generate_content_batch(
         self,
         requests: list[GenerateContentRequest],
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.5-flash-lite",
         tools: list[dict[str, Any]] | None = None,
         max_workers: int = 5,
         raise_for_status: bool = True,
@@ -947,7 +947,7 @@ class CategoryTopicsGenerator:
             return results[:3]
 
     def generate(
-        self, domain: str, country: str, language_code: str, domain_definition: str, model: str = "gemini-3.5-flash"
+        self, domain: str, country: str, language_code: str, domain_definition: str, model: str = "gemini-3.5-flash-lite"
     ) -> pd.DataFrame:
         prompt = self._generate_prompt(domain, country, language_code, domain_definition)
         req = GenerateContentRequest(prompt=prompt)
@@ -1059,7 +1059,7 @@ class KeywordsGenerator:
         country: Any,
         language_code: str,
         domain_definition: str,
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.5-flash-lite",
     ) -> pd.DataFrame:
         # Cap to exactly 10 requests for a single batch of 10 parallel workers
         df_subset = category_topics_df.head(10)
@@ -1283,7 +1283,7 @@ class PromptsGenerator:
         country: str,
         domain_definition: str,
         num_prompts: int = 2,
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.5-flash-lite",
         modality: list[str] | str | None = None,
     ) -> pd.DataFrame:
         if isinstance(modality, list) and modality:
@@ -1707,7 +1707,7 @@ class CredibleSourceGenerator:
         category: str,
         topic: str,
         keywords: str | list[str],
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.5-flash-lite",
     ) -> dict[str, Any]:
         """Fetches research paper citations for a single taxonomy node using search grounding.
         Fails fast if the user-selected model encounters an error (no fallback to other models).
@@ -1748,7 +1748,7 @@ class CredibleSourceGenerator:
         self,
         taxonomy_df: pd.DataFrame,
         domain: str,
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.5-flash-lite",
         max_workers: int = 5,
     ) -> pd.DataFrame:
         """Grounds all rows in taxonomy_df with credible research papers using search grounding.
@@ -1856,7 +1856,7 @@ def generate_credible_sources(
     domain: str,
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.5-flash",
+    model: str = "gemini-3.5-flash-lite",
     max_workers: int = 5,
     cancel_event: Any = None,
     heartbeat_callback: Any = None,
@@ -1879,7 +1879,7 @@ def fetch_citation_for_node(
     keywords: str | list[str],
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.5-flash",
+    model: str = "gemini-3.5-flash-lite",
     cancel_event: Any = None,
     heartbeat_callback: Any = None,
 ) -> dict[str, Any]:
@@ -1903,7 +1903,7 @@ def generate_dynamic_prompts(
     num_prompts: int = 2,
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.5-flash",
+    model: str = "gemini-3.5-flash-lite",
     modality: list[str] | str | None = None,
     progress_callback: Any = None,
     cancel_event: Any = None,
@@ -1939,7 +1939,7 @@ def generate_dynamic_taxonomy(
     modality: list[str] | str = "text-to-text",
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
-    model: str = "gemini-3.5-flash",
+    model: str = "gemini-3.5-flash-lite",
     progress_callback: Any = None,
     cancel_event: Any = None,
     heartbeat_callback: Any = None,
@@ -1981,7 +1981,7 @@ def generate_dynamic_taxonomy(
         progress_callback(0.85, f"Discovering research paper citations for {len(final_df)} taxonomy branches...")
 
     # Grounding: Respect selected model and fail fast without fallback or swallowing errors
-    grounding_model = model or "gemini-3.5-flash"
+    grounding_model = model or "gemini-3.5-flash-lite"
     credible_gen = CredibleSourceGenerator(ai_client)
     final_df = credible_gen.generate(
         taxonomy_df=final_df,
@@ -2018,8 +2018,8 @@ class ModelEvaluationGenerator:
     def evaluate(
         self,
         prompts_df: pd.DataFrame,
-        model_name: str = "gemini-3.5-flash",
-        display_model_name: str = "Gemini 3.5 Flash",
+        model_name: str = "gemini-3.5-flash-lite",
+        display_model_name: str = "Gemini 3.5 Flash-Lite",
         max_prompts: int = 50,
         item_callback: Any = None,
     ) -> pd.DataFrame:
@@ -2192,7 +2192,7 @@ class AutoraterJudgeGenerator:
         self,
         eval_df: pd.DataFrame,
         rubric_template: str,
-        judge_model_name: str = "gemini-3.5-flash",
+        judge_model_name: str = "gemini-3.5-flash-lite",
         max_rows: int | None = None,
         item_callback: Any = None,
     ) -> pd.DataFrame:
@@ -2259,7 +2259,7 @@ class AutoraterJudgeGenerator:
 def generate_dynamic_autoratings(
     eval_df: pd.DataFrame,
     rubric_template: str,
-    judge_model_name: str = "gemini-3.5-flash",
+    judge_model_name: str = "gemini-3.5-flash-lite",
     max_rows: int | None = None,
     api_key: str | None = None,
     api_keys: dict[str, str] | None = None,
