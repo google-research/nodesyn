@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <title>NodeSyn Taxonomy Demo</title>
+    <!--
+      Static hosting entrypoint (e.g. GitHub Pages).
+      Runs the Streamlit app entirely in the visitor's browser via stlite (Pyodide),
+      so no Python server is needed. Only the static workflow is supported here;
+      the dynamic LLM workflow requires running locally via ./run.sh.
+    -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.0/build/stlite.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.0/build/stlite.js";
+
+      mount(
+        {
+          requirements: ["pandas", "numpy", "plotly"],
+          entrypoint: "streamlit_app.py",
+          streamlitConfig: {
+            "theme.base": "light",
+            "browser.gatherUsageStats": false,
+          },
+          files: {
+            "streamlit_app.py": { url: "./streamlit_app.py" },
+            "d3_sankey.py": { url: "./d3_sankey.py" },
+            "NodeSyn_Data_med_Full_Export.csv": { url: "./NodeSyn_Data_med_Full_Export.csv" },
+            "evaluation_data.csv": { url: "./evaluation_data.csv" },
+            "analyse.csv": { url: "./analyse.csv" },
+          },
+        },
+        document.getElementById("root"),
+      );
+    </script>
+  </body>
+</html>

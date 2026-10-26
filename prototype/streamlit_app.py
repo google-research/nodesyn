@@ -1,6 +1,7 @@
 import os
 import re
 import math
+import sys
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -20,23 +21,63 @@ import importlib
 import d3_sankey
 importlib.reload(d3_sankey)
 from d3_sankey import create_d3_sankey_html
-import gemini_backend
-importlib.reload(gemini_backend)
-from gemini_backend import (
-    GeminiBackendError,
-    GenerationCancelledError,
-    parse_backend_error,
-    generate_dynamic_taxonomy,
-    generate_dynamic_prompts,
-    generate_dynamic_evaluations,
-    generate_dynamic_autoratings,
-    generate_credible_sources,
-    fetch_citation_for_node,
-    get_configured_api_keys,
-    get_available_providers,
-    get_model_provider,
-    get_default_llama_model,
-)
+
+# True when running in the browser via stlite/Pyodide (static GitHub Pages hosting).
+# In that mode only the static workflow is served, and the LLM backend (which depends on
+# google-genai / openai / anthropic) is not imported.
+IS_STATIC_HOSTING = sys.platform == "emscripten"
+
+if not IS_STATIC_HOSTING:
+    import gemini_backend
+    importlib.reload(gemini_backend)
+    from gemini_backend import (
+        GeminiBackendError,
+        GenerationCancelledError,
+        parse_backend_error,
+        generate_dynamic_taxonomy,
+        generate_dynamic_prompts,
+        generate_dynamic_evaluations,
+        generate_dynamic_autoratings,
+        generate_credible_sources,
+        fetch_citation_for_node,
+        get_configured_api_keys,
+        get_available_providers,
+        get_model_provider,
+        get_default_llama_model,
+    )
+else:
+
+    class GeminiBackendError(Exception):
+        """Placeholder: dynamic LLM backend is unavailable in static hosting."""
+
+        diagnostics: dict[str, Any] = {}
+        model = None
+
+    class GenerationCancelledError(Exception):
+        """Placeholder: dynamic LLM backend is unavailable in static hosting."""
+
+    def _dynamic_unavailable(*_args, **_kwargs):
+        raise RuntimeError("Dynamic LLM features are not supported in the hosted static webapp.")
+
+    generate_dynamic_taxonomy = generate_dynamic_prompts = _dynamic_unavailable
+    generate_dynamic_evaluations = generate_dynamic_autoratings = _dynamic_unavailable
+    generate_credible_sources = fetch_citation_for_node = _dynamic_unavailable
+
+    def parse_backend_error(error, model=None, provider=None) -> dict[str, Any]:
+        return {"category": "UNSUPPORTED_MODE", "headline": "Not supported", "gist": str(error),
+                "explanation": "", "retry_action": "", "is_retryable": False, "raw_message": str(error)}
+
+    def get_configured_api_keys() -> dict[str, str]:
+        return {}
+
+    def get_available_providers() -> dict[str, bool]:
+        return {"gemini": False, "openai": False, "anthropic": False, "llama": False}
+
+    def get_model_provider(model_name: str) -> str:
+        return "gemini"
+
+    def get_default_llama_model(size: str = "70b") -> str:
+        return ""
 
 PROVIDER_DISPLAY_NAMES = {
     "gemini": "Google Gemini",
@@ -108,6 +149,8 @@ def get_app_api_keys() -> dict[str, str]:
 
 def is_running_locally() -> bool:
     """Checks if the application is running in a local environment."""
+    if IS_STATIC_HOSTING:
+        return False
     if any(os.environ.get(k) for k in [
         "STREAMLIT_SHARING_MODE",
         "K_SERVICE",        # Google Cloud Run

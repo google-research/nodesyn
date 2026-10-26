@@ -1,0 +1,49 @@
+name: Deploy static prototype to GitHub Pages
+
+# Publishes the static NodeSyn prototype (prototype/index.html + app files) to GitHub Pages.
+# The Streamlit app runs fully in the visitor's browser via stlite, so no server is needed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "prototype/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble static site
+        run: |
+          mkdir -p _site
+          cp prototype/index.html \
+             prototype/streamlit_app.py \
+             prototype/d3_sankey.py \
+             prototype/NodeSyn_Data_med_Full_Export.csv \
+             prototype/evaluation_data.csv \
+             prototype/analyse.csv \
+             _site/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
