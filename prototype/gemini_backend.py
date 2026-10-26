@@ -530,13 +530,19 @@ class MultiModelUtils:
                 self._openai_client = openai.OpenAI(api_key=o_key, timeout=45.0)
 
         openai_model_map = {
-            "o3-mini": "gpt-5.4-nano",
-            "o1": "gpt-6-luna",
-            "gpt-4o": "gpt-6-luna",
-            "gpt-4o-mini": "gpt-5.4-nano",
-            "gpt-6 luna": "gpt-6-luna",
-            "gpt-6.1 sol": "gpt-6.1-sol",
-            "gpt-5.4 nano": "gpt-5.4-nano",
+            "gpt-4o mini": "gpt-4o-mini",
+            "gpt-4o-mini": "gpt-4o-mini",
+            "gpt-4.1": "gpt-4.1",
+            "gpt-4.1 mini": "gpt-4.1-mini",
+            "gpt-4.1-mini": "gpt-4.1-mini",
+            "o3-mini": "gpt-4o-mini",
+            "o1": "gpt-4.1",
+            "gpt-6-luna": "gpt-4.1",
+            "gpt-6 luna": "gpt-4.1",
+            "gpt-6.1-sol": "gpt-4.1-mini",
+            "gpt-6.1 sol": "gpt-4.1-mini",
+            "gpt-5.4-nano": "gpt-4o-mini",
+            "gpt-5.4 nano": "gpt-4o-mini",
         }
         resolved_model = openai_model_map.get(model.lower().strip(), model)
 

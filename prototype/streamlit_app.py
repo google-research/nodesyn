@@ -58,9 +58,9 @@ PROVIDER_MODELS = {
         ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
     ],
     "openai": [
-        ("gpt-6-luna", "GPT-6 Luna"),
-        ("gpt-6.1-sol", "GPT-6.1 Sol"),
-        ("gpt-5.4-nano", "GPT-5.4 nano"),
+        ("gpt-4o-mini", "GPT-4o mini"),
+        ("gpt-4.1", "GPT-4.1"),
+        ("gpt-4.1-mini", "GPT-4.1 mini"),
     ],
     "anthropic": [
         ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
@@ -160,9 +160,9 @@ def get_evaluation_model_options() -> dict[str, tuple[str, str]]:
         options["Gemini 3.1 Flash-Lite (Google)"] = ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite")
 
     if "openai" in active:
-        options["GPT-6 Luna (OpenAI)"] = ("gpt-6-luna", "GPT-6 Luna")
-        options["GPT-6.1 Sol (OpenAI)"] = ("gpt-6.1-sol", "GPT-6.1 Sol")
-        options["GPT-5.4 nano (OpenAI)"] = ("gpt-5.4-nano", "GPT-5.4 nano")
+        options["GPT-4o mini (OpenAI)"] = ("gpt-4o-mini", "GPT-4o mini")
+        options["GPT-4.1 (OpenAI)"] = ("gpt-4.1", "GPT-4.1")
+        options["GPT-4.1 mini (OpenAI)"] = ("gpt-4.1-mini", "GPT-4.1 mini")
 
     if "anthropic" in active:
         options["Claude Sonnet 4.6 (Anthropic)"] = ("claude-sonnet-4-6", "Claude Sonnet 4.6")
@@ -184,9 +184,9 @@ def get_autorater_judge_options() -> dict[str, str]:
         options["Gemini 3.5 Flash (Google) - Capable Judge"] = "gemini-3.5-flash"
         options["Gemini 3.1 Flash-Lite (Google) - High Speed Judge"] = "gemini-3.1-flash-lite"
     if "openai" in active:
-        options["GPT-6 Luna (OpenAI Judge)"] = "gpt-6-luna"
-        options["GPT-6.1 Sol (OpenAI Judge)"] = "gpt-6.1-sol"
-        options["GPT-5.4 nano (OpenAI Fast Judge)"] = "gpt-5.4-nano"
+        options["GPT-4o mini (OpenAI Fast Judge)"] = "gpt-4o-mini"
+        options["GPT-4.1 (OpenAI Judge)"] = "gpt-4.1"
+        options["GPT-4.1 mini (OpenAI Fast Judge)"] = "gpt-4.1-mini"
     if "anthropic" in active:
         options["Claude Sonnet 4.6 (Anthropic Judge)"] = "claude-sonnet-4-6"
         options["Claude Sonnet 4.5 (Anthropic)"] = "claude-sonnet-4-5"
@@ -4373,9 +4373,9 @@ elif st.session_state.step == "Analysis":
         "Gemini Flash": {"line": "#6366f1", "fill": "rgba(99,102,241,0.08)"},
         "Gemini 2.5 flash": {"line": "#4f46e5", "fill": "rgba(79,70,229,0.08)"},
         # OpenAI
-        "GPT-6 Luna": {"line": "#10b981", "fill": "rgba(16,185,129,0.08)"},
-        "GPT-6.1 Sol": {"line": "#059669", "fill": "rgba(5,150,105,0.08)"},
-        "GPT-5.4 nano": {"line": "#047857", "fill": "rgba(4,120,87,0.08)"},
+        "GPT-4o mini": {"line": "#10b981", "fill": "rgba(16,185,129,0.08)"},
+        "GPT-4.1": {"line": "#059669", "fill": "rgba(5,150,105,0.08)"},
+        "GPT-4.1 mini": {"line": "#047857", "fill": "rgba(4,120,87,0.08)"},
         "GPT-4o": {"line": "#10b981", "fill": "rgba(16,185,129,0.08)"},
         "GPT-4o Mini": {"line": "#059669", "fill": "rgba(5,150,105,0.08)"},
         "GPT o4-mini": {"line": "#10b981", "fill": "rgba(16,185,129,0.08)"},
