@@ -6,6 +6,8 @@ An end-to-end research workbench for AI safety benchmarking, dynamic taxonomy ge
 
 ## How to run it on your own machine
 
+**Prerequisite:** Python **3.11 or newer**. Check your version with `python3 --version`. `./run.sh` verifies this automatically and will stop with instructions if only an older Python is found.
+
 Clone the repository, then navigate to the `prototype` directory:
 
 ```bash

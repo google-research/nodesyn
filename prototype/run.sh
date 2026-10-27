@@ -24,23 +24,37 @@ echo "🛡️  NodeSyn Dynamic Evaluation Studio: Setup & Launch"
 echo "============================================================"
 
 # ── 1. Python & Virtual Environment Setup ─────────────────────────────────────
+# NodeSyn requires Python 3.11 or newer.
+MIN_PY_MAJOR=3
+MIN_PY_MINOR=11
+PY_VERSION_CHECK="import sys; sys.exit(0 if sys.version_info >= ($MIN_PY_MAJOR, $MIN_PY_MINOR) else 1)"
+
 PYTHON_BIN=""
-for py_cmd in python3.13 python3.12 python3.11 python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 python; do
+FOUND_OLD_PYTHON=""
+for py_cmd in python3.14 python3.13 python3.12 python3.11 python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 python; do
     if command -v "$py_cmd" >/dev/null 2>&1; then
         resolved_cmd="$(command -v "$py_cmd")"
         # Verify the interpreter actually executes and is not a broken macOS shim
         if "$resolved_cmd" -c "import sys; sys.exit(0)" >/dev/null 2>&1; then
-            PYTHON_BIN="$resolved_cmd"
-            break
+            # Verify the interpreter meets the minimum supported version
+            if "$resolved_cmd" -c "$PY_VERSION_CHECK" >/dev/null 2>&1; then
+                PYTHON_BIN="$resolved_cmd"
+                break
+            elif [ -z "$FOUND_OLD_PYTHON" ]; then
+                FOUND_OLD_PYTHON="$("$resolved_cmd" --version 2>&1) ($resolved_cmd)"
+            fi
         fi
     fi
 done
 
 if [ -z "$PYTHON_BIN" ]; then
     echo ""
-    echo "❌ Error: No working Python 3 installation was found."
-    echo "   • On macOS: run 'xcode-select --install' in terminal, or install Python via Homebrew ('brew install python')."
-    echo "   • On Linux: run 'sudo apt install python3 python3-venv' or equivalent."
+    echo "❌ Error: Python $MIN_PY_MAJOR.$MIN_PY_MINOR or newer is required, but none was found."
+    if [ -n "$FOUND_OLD_PYTHON" ]; then
+        echo "   Found an older version: $FOUND_OLD_PYTHON"
+    fi
+    echo "   • On macOS: install a newer Python via Homebrew ('brew install python@3.12')."
+    echo "   • On Linux: run 'sudo apt install python3.12 python3.12-venv' or equivalent."
     echo "   • Or download Python directly from https://www.python.org/downloads/"
     exit 1
 fi
@@ -49,9 +63,13 @@ echo "[1/4] Using Python: $($PYTHON_BIN --version 2>&1) ($PYTHON_BIN)"
 
 VENV_DIR="$SCRIPT_DIR/venv"
 if [ -d "$VENV_DIR" ]; then
-    # Test if existing venv is healthy
+    # Test if existing venv is healthy and was created with a supported Python version
     if ! "$VENV_DIR/bin/python" -c "import sys; sys.exit(0)" >/dev/null 2>&1; then
         echo "[2/4] Existing venv at ./venv appears invalid. Recreating..."
+        rm -rf "$VENV_DIR"
+        "$PYTHON_BIN" -m venv "$VENV_DIR"
+    elif ! "$VENV_DIR/bin/python" -c "$PY_VERSION_CHECK" >/dev/null 2>&1; then
+        echo "[2/4] Existing venv at ./venv uses $("$VENV_DIR/bin/python" --version 2>&1), but Python $MIN_PY_MAJOR.$MIN_PY_MINOR+ is required. Recreating..."
         rm -rf "$VENV_DIR"
         "$PYTHON_BIN" -m venv "$VENV_DIR"
     else
