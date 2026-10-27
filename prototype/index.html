@@ -10,12 +10,135 @@
       so no Python server is needed. Only the static workflow is supported here;
       the dynamic LLM workflow requires running locally via ./run.sh.
     -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link rel="preconnect" href="https://files.pythonhosted.org" crossorigin />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.0/build/stlite.css" />
+    <style>
+      /* Branded loading screen shown while Python starts up in the browser. */
+      #nodesyn-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #1e1b4b 0%, #312e81 45%, #4338ca 100%);
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: #fff;
+        transition: opacity 0.4s ease;
+      }
+      #nodesyn-splash.hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #nodesyn-splash .card {
+        text-align: center;
+        max-width: 440px;
+        padding: 2rem;
+      }
+      #nodesyn-splash .logo {
+        width: 64px;
+        height: 64px;
+        margin: 0 auto 1.25rem;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.18);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 2rem;
+      }
+      #nodesyn-splash h1 {
+        margin: 0 0 0.4rem;
+        font-size: 1.9rem;
+        font-weight: 800;
+        letter-spacing: -0.025em;
+      }
+      #nodesyn-splash .subtitle {
+        margin: 0 0 1.75rem;
+        color: rgba(255, 255, 255, 0.8);
+        font-size: 0.98rem;
+        line-height: 1.5;
+      }
+      #nodesyn-splash .bar {
+        height: 6px;
+        border-radius: 9999px;
+        background: rgba(255, 255, 255, 0.18);
+        overflow: hidden;
+      }
+      #nodesyn-splash .bar > div {
+        height: 100%;
+        width: 0%;
+        border-radius: 9999px;
+        background: linear-gradient(90deg, #a5b4fc, #ffffff);
+        transition: width 0.8s ease;
+      }
+      #nodesyn-splash .status {
+        margin-top: 0.9rem;
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: rgba(255, 255, 255, 0.92);
+        min-height: 1.3em;
+      }
+      #nodesyn-splash .hint {
+        margin-top: 1.5rem;
+        font-size: 0.8rem;
+        color: rgba(255, 255, 255, 0.6);
+        line-height: 1.5;
+      }
+    </style>
   </head>
   <body>
+    <div id="nodesyn-splash" role="status" aria-live="polite">
+      <div class="card">
+        <div class="logo">🔗</div>
+        <h1>NodeSyn Platform</h1>
+        <p class="subtitle">End-to-end evaluation workbench for high-stakes AI safety, policy, and domain using grounded synthetic data.</p>
+        <div class="bar"><div id="nodesyn-splash-progress"></div></div>
+        <div class="status" id="nodesyn-splash-status">Loading the interactive prototype…</div>
+        <div class="hint">The prototype runs entirely in your browser, so the first visit takes about 15–20&nbsp;seconds.</div>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module">
       import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.0/build/stlite.js";
+
+      // --- Loading screen: approximate stages, hidden once the app renders its first element. ---
+      const splash = document.getElementById("nodesyn-splash");
+      const statusEl = document.getElementById("nodesyn-splash-status");
+      const progressEl = document.getElementById("nodesyn-splash-progress");
+      const stages = [
+        [0, 5, "Loading the Python runtime…"],
+        [4, 30, "Downloading data-science libraries…"],
+        [9, 55, "Installing pandas and Plotly…"],
+        [14, 80, "Starting the NodeSyn app…"],
+        [20, 92, "Almost there…"],
+      ];
+      const start = performance.now();
+      const tick = setInterval(() => {
+        const elapsed = (performance.now() - start) / 1000;
+        for (const [t, pct, msg] of stages) {
+          if (elapsed >= t) {
+            statusEl.textContent = msg;
+            progressEl.style.width = pct + "%";
+          }
+        }
+      }, 500);
+      const hideSplash = () => {
+        clearInterval(tick);
+        progressEl.style.width = "100%";
+        splash.classList.add("hidden");
+        setTimeout(() => splash.remove(), 600);
+        observer.disconnect();
+      };
+      const observer = new MutationObserver(() => {
+        // Wait for real app content (rendered markdown), not stlite's loading skeleton.
+        if (document.querySelector('[data-testid="stMain"] [data-testid="stMarkdownContainer"]')) {
+          hideSplash();
+        }
+      });
+      observer.observe(document.getElementById("root"), { childList: true, subtree: true });
+      // Safety net: never keep the overlay up indefinitely.
+      setTimeout(() => document.getElementById("nodesyn-splash") && hideSplash(), 120000);
 
       mount(
         {

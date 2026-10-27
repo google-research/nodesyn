@@ -1,6 +1,5 @@
 """D3-based Sankey diagram with HTML-rendered labels for consistent fonts."""
 import json
-import pandas as pd
 import textwrap
 
 
@@ -10,6 +9,9 @@ def create_d3_sankey_html(df_final, height=700, scale_factor=1.0):
     Labels use foreignObject so they render as HTML (matching page fonts).
     Filters are native HTML <select> elements with JS-driven re-rendering.
     """
+    # Imported lazily so that importing this module does not load pandas (slow in the browser build).
+    import pandas as pd
+
     if df_final.empty:
         return "<p>No data</p>"
 

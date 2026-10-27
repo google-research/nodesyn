@@ -1,14 +1,45 @@
+from __future__ import annotations
+
 import os
 import re
 import math
 import sys
+import importlib
 import streamlit as st
 import streamlit.components.v1 as components
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
+
+# True when running in the browser via stlite/Pyodide (static GitHub Pages hosting).
+# In that mode only the static workflow is served, and the LLM backend (which depends on
+# google-genai / openai / anthropic) is not imported.
+IS_STATIC_HOSTING = sys.platform == "emscripten"
+
+if IS_STATIC_HOSTING:
+    # In the browser, importing pandas/plotly takes several seconds. Defer those imports until
+    # first use so the Home page (which needs neither) renders first; they are then pre-loaded
+    # while the visitor reads the Home page (see the end of the Home page section).
+    class _LazyModule:
+        """Proxy that imports the named module on first attribute access."""
+
+        def __init__(self, module_name: str):
+            self._module_name = module_name
+
+        def __getattr__(self, attr: str):
+            return getattr(importlib.import_module(self._module_name), attr)
+
+    pd = _LazyModule("pandas")
+    np = _LazyModule("numpy")
+    go = _LazyModule("plotly.graph_objects")
+    px = _LazyModule("plotly.express")
+
+    def make_subplots(*args, **kwargs):
+        from plotly.subplots import make_subplots as _make_subplots
+        return _make_subplots(*args, **kwargs)
+else:
+    import pandas as pd
+    import numpy as np
+    import plotly.graph_objects as go
+    import plotly.express as px
+    from plotly.subplots import make_subplots
 import ast
 from collections import Counter
 import time
@@ -17,15 +48,10 @@ import json
 import textwrap
 import urllib.parse
 from typing import Any
-import importlib
 import d3_sankey
 importlib.reload(d3_sankey)
 from d3_sankey import create_d3_sankey_html
 
-# True when running in the browser via stlite/Pyodide (static GitHub Pages hosting).
-# In that mode only the static workflow is served, and the LLM backend (which depends on
-# google-genai / openai / anthropic) is not imported.
-IS_STATIC_HOSTING = sys.platform == "emscripten"
 
 if not IS_STATIC_HOSTING:
     import gemini_backend
@@ -1048,7 +1074,9 @@ if 'saved_modality' not in st.session_state:
 if 'modality' not in st.session_state:
     st.session_state.modality = list(st.session_state.saved_modality)
 
-if 'demo_data' not in st.session_state:
+if 'demo_data' not in st.session_state and not (IS_STATIC_HOSTING and st.session_state.step == "Home"):
+    # In the browser build, defer loading the CSV (and therefore pandas) until the visitor
+    # leaves the Home page, so the Home page renders as early as possible.
     try:
         st.session_state.demo_data = load_data("NodeSyn_Data_med_Full_Export.csv")
     except:
@@ -1232,6 +1260,20 @@ if st.session_state.step == "Home":
 
         if st.session_state.get("show_dynamic_cloud_info"):
             st.info("ℹ️ For dynamic workflow using your own API key, you need to visit [https://github.com/google-research/nodesyn#how-to-run-it-on-your-own-machine](https://github.com/google-research/nodesyn#how-to-run-it-on-your-own-machine).\n\nDue to security reasons, dynamic flow powered by API keys is not supported. Please setup the webapp locally using the instructions mentioned in the Google Research repo.")
+
+    if IS_STATIC_HOSTING and "pandas" not in sys.modules:
+        # In the browser build the page is only sent once the script run finishes, so preload the
+        # heavy libraries in a *separate* fragment run shortly after the Home page has rendered.
+        # This keeps the Home page fast while the static workflow still opens quickly on click.
+        @st.fragment(run_every=0.5)
+        def _preload_heavy_libraries():
+            if st.session_state.get("_preload_scheduled"):
+                import pandas  # noqa: F401
+                import plotly.express  # noqa: F401
+                import plotly.graph_objects  # noqa: F401
+            st.session_state["_preload_scheduled"] = True
+
+        _preload_heavy_libraries()
 
 elif st.session_state.step == "Read Me":
     st.title("📖 User Guide: NodeSyn")
