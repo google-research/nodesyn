@@ -1077,9 +1077,13 @@ def _as_str_list(value: Any) -> list[str]:
 
 
 def parse_persona_prompts(
-    raw_prompts: Any, slot_modalities: list[str], allowed_modalities: list[str]
+    raw_prompts: Any, slot_modalities: list[str], allowed_modalities: list[str], places_out: list[str] | None = None,
+    countries_out: list[str] | None = None,
 ) -> tuple[list[str], list[str], list[str]]:
-    """Parses model output prompts (objects or plain strings) into parallel lists of text, modality, persona."""
+    """Parses model output prompts (objects or plain strings) into parallel lists of text, modality, persona.
+
+    If places_out is given, the specific place (city / town / region) each prompt is set in is appended to it.
+    """
     allowed = {m.lower(): m for m in allowed_modalities}
     texts, mods, personas = [], [], []
     items = raw_prompts if isinstance(raw_prompts, list) else ([raw_prompts] if raw_prompts else [])
@@ -1089,14 +1093,76 @@ def parse_persona_prompts(
             text = str(item.get("prompt") or item.get("text") or item.get("query") or "").strip()
             mod = str(item.get("modality") or "").strip().lower()
             persona = str(item.get("persona") or "").strip()
+            place = str(item.get("place") or "").strip()
+            reported_country = str(item.get("country") or "").strip()
         else:
-            text, mod, persona = str(item).strip(), "", ""
+            text, mod, persona, place, reported_country = str(item).strip(), "", "", "", ""
         if not text:
             continue
         texts.append(text)
         mods.append(allowed.get(mod, slot_mod))
         personas.append(persona)
+        if places_out is not None:
+            places_out.append(place)
+        if countries_out is not None:
+            countries_out.append(reported_country)
     return texts, mods, personas
+
+
+_COUNTRY_ALIASES = {
+    "united states": ["united states", "usa", "u.s.", "america", "american"],
+    "usa": ["united states", "usa", "u.s.", "america", "american"],
+    "united kingdom": ["united kingdom", "uk", "u.k.", "britain", "british", "england", "scotland", "wales"],
+    "uk": ["united kingdom", "uk", "u.k.", "britain", "british", "england"],
+}
+
+
+def mentions_country(text: str, country: str) -> bool:
+    """True if the prompt text names the country (or a common alias / demonym-like form)."""
+    if not country:
+        return True
+    t = f" {str(text).lower()} "
+    c = str(country).strip().lower()
+    names = _COUNTRY_ALIASES.get(c, [c])
+    return any(re.search(r"(?<![a-z])" + re.escape(n) + r"(?![a-z])", t) for n in names)
+
+
+def _mentions_phrase(text: str, phrase: str) -> bool:
+    phrase = str(phrase or "").strip().lower()
+    if len(phrase) < 3:
+        return False
+    return re.search(r"(?<![a-z])" + re.escape(phrase) + r"(?![a-z])", f" {str(text).lower()} ") is not None
+
+
+def same_country(a: str, b: str) -> bool:
+    """Loose country equality (case-insensitive, common aliases such as USA / United States)."""
+    a, b = str(a or "").strip().lower(), str(b or "").strip().lower()
+    if not a or not b:
+        return True
+    return a == b or b in _COUNTRY_ALIASES.get(a, []) or a in _COUNTRY_ALIASES.get(b, [])
+
+
+def is_location_grounded(text: str, country: str, places: list[str] | None = None) -> bool:
+    """True if the prompt is explicitly located in the row's country: it names a specific place within the country
+    (city / town / region, as reported by the generator or from the grounding paper), or the country itself."""
+    if not country:
+        return True
+    for place in places or []:
+        if place and place.strip().lower() not in {country.strip().lower(), "global", "n/a", "none"} and _mentions_phrase(text, place):
+            return True
+    return mentions_country(text, country)
+
+
+def ensure_country_in_prompt(text: str, modality: str, country: str, place: str = "") -> str:
+    """Last-resort deterministic fix for a prompt that names neither a place in the country nor the country.
+    Prefers the specific place (e.g. "Nairobi, Kenya") over the broad country label."""
+    if not country or is_location_grounded(text, country, [place]):
+        return text
+    where = f"{place}, {country}" if place and place.strip().lower() != country.strip().lower() else country
+    text = str(text).rstrip()
+    if modality in ("text-to-image", "text-to-video"):
+        return f"{text} The scene is set in {where}."
+    return f"{text} (I live in {where}.)"
 
 
 def fallback_persona_prompt(modality: str, persona: str, topic: str, keywords: str, country: str) -> str:
@@ -1372,6 +1438,7 @@ class PromptsGenerator:
         country: str,
         use_case: str,
         slot_modalities: list[str],
+        place: str = "",
     ) -> str:
         kw_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
         occ_str = ", ".join(occupations) if occupations else "N/A"
@@ -1387,7 +1454,7 @@ class PromptsGenerator:
         • Sensitive User Groups:
           – Occupation: {occ_str}
           – Demographics: {demo_str}
-          – Country/Region: {country_str}
+          – Country/Region: {country_str}{f" (research setting: {place})" if place else ""}
         • Use Case: {use_case}
         • LLM Evaluation Modality: {modality_str}
         Your task is to generate diverse prompts that reflect the unique concerns and language of each identified sensitive group for the given use case and evaluation modality. Do not provide rationale, we just want clean prompts.
@@ -1395,8 +1462,8 @@ class PromptsGenerator:
         Generate exactly {n} prompts, one per slot below. Each slot has a required modality; write the prompt in the form that modality expects:
 {format_prompt_slots(slot_modalities)}
         Each prompt must speak from, or depict, a member of the sensitive user groups above (an occupation and/or demographic), using their concerns and language. Use a different sensitive group for each prompt.
-        Every prompt must be set in {country_str}: explicitly name it (or a real city / region within it) and use only names, places, institutions, languages, and cultural details from there. Never set a prompt in any other country.
-        Output ONLY a JSON array of {n} objects, one per slot in order: [{{"modality": "<slot modality>", "group": "<the occupation / demographic the prompt represents>", "prompt": "<the prompt text>"}}]
+        Every prompt must be set in a specific, real city, town, or region within {country_str}{f" (prefer {place})" if place else ""} and must name that place explicitly; prefer a specific place over the broad country label (naming the place is enough). Use only names, places, institutions, languages, and cultural details from {country_str}. Never set a prompt in any other country.
+        Output ONLY a JSON array of {n} objects, one per slot in order: [{{"modality": "<slot modality>", "group": "<the occupation / demographic the prompt represents>", "place": "<the city / town / region named in the prompt>", "country": "<the country that place is in>", "prompt": "<the prompt text>"}}]
         """)
 
     @staticmethod
@@ -1419,9 +1486,13 @@ class PromptsGenerator:
         else:
             row_country = ""
         row_use_case = use_case or str(row.get("user_case", "") or "").strip() or "Advice seeking"
+        row_place = str(row.get("extracted_place") or "").strip()
+        if row_place.lower() in {"nan", "none", "n/a"} or not row_country:
+            row_place = ""
         return {
             "level1": level1, "level2": level2, "keywords": keywords, "user_group": user_group,
             "occupations": occupations, "demographics": demographics, "country": row_country, "use_case": row_use_case,
+            "place": row_place,
         }
 
     def _generate_for_rows(
@@ -1442,7 +1513,7 @@ class PromptsGenerator:
             slot_modalities = assign_prompt_modalities(modality_list, num_prompts, offset=req_idx * num_prompts)
             prompt_text = self._generate_prompt(
                 domain, inputs["level1"], inputs["level2"], inputs["keywords"], inputs["occupations"],
-                inputs["demographics"], inputs["country"], inputs["use_case"], slot_modalities,
+                inputs["demographics"], inputs["country"], inputs["use_case"], slot_modalities, place=inputs["place"],
             )
             requests.append(GenerateContentRequest(
                 prompt=prompt_text,
@@ -1463,7 +1534,7 @@ class PromptsGenerator:
             elif "```" in content:
                 content = content.split("```", 1)[1].split("```", 1)[0].strip()
 
-            texts, mods, groups = [], [], []
+            texts, mods, groups, places, rep_countries = [], [], [], [], []
             try:
                 parsed = json.loads(content)
                 if isinstance(parsed, dict):
@@ -1472,11 +1543,12 @@ class PromptsGenerator:
                     for item in parsed:
                         if isinstance(item, dict) and "group" in item and "persona" not in item:
                             item["persona"] = item["group"]
-                texts, mods, groups = parse_persona_prompts(parsed, slot_modalities, modality_list)
+                texts, mods, groups = parse_persona_prompts(parsed, slot_modalities, modality_list, places_out=places, countries_out=rep_countries)
             except Exception:
                 cleaned = re.sub(r'^\d+[\.\)]\s*', '', content, flags=re.MULTILINE)
                 items = [re.sub(r'^[-\*\•]\s*', '', line).strip() for line in cleaned.split('\n') if line.strip()]
-                texts, mods, groups = parse_persona_prompts(items[:num_prompts], slot_modalities, modality_list)
+                places, rep_countries = [], []
+                texts, mods, groups = parse_persona_prompts(items[:num_prompts], slot_modalities, modality_list, places_out=places, countries_out=rep_countries)
 
             if len(texts) < len(slot_modalities):
                 # Fill any slots the model did not return with group- and modality-aware fallbacks.
@@ -1488,12 +1560,100 @@ class PromptsGenerator:
                     group = " ".join(
                         part for part in [demo_opts[j % len(demo_opts)], occ_opts[j % len(occ_opts)]] if part
                     ).strip()
-                    texts.append(fallback_persona_prompt(slot_modalities[j], group.lower(), meta["level2"], kw_str, meta["country"]))
+                    where = f"{meta['place']}, {meta['country']}" if meta["place"] else meta["country"]
+                    texts.append(fallback_persona_prompt(slot_modalities[j], group.lower(), meta["level2"], kw_str, where))
                     mods.append(slot_modalities[j])
                     groups.append(group)
+                    places.append(meta["place"])
+                    rep_countries.append(meta["country"])
 
-            outputs.append({"row_index": meta["row_index"], "row_data": meta["row_data"], "texts": texts, "mods": mods, "groups": groups})
+            outputs.append({"row_index": meta["row_index"], "row_data": meta["row_data"], "texts": texts, "mods": mods, "groups": groups,
+                            "places": places, "rep_countries": rep_countries, "country": meta["country"], "row_place": meta["place"], "base_prompt": req.prompt})
+
+        self._enforce_country(outputs, model)
         return outputs
+
+    def _enforce_country(self, outputs: list[dict[str, Any]], model: str) -> None:
+        """Ensures every prompt is located in its row's country, preferring a specific place (city / region) within it.
+
+        A prompt passes if it names a specific place within the country (reported by the generator or from the
+        grounding paper) or the country itself. Non-compliant prompts get one batched retry; any still failing get a
+        deterministic fix that adds the specific place (if known) or the country.
+        """
+        def _ok(o: dict[str, Any], i: int) -> bool:
+            reported = o["rep_countries"][i] if i < len(o["rep_countries"]) else ""
+            if reported and not same_country(reported, o["country"]):
+                return False  # the named place is in a different country
+            places = [o["places"][i] if i < len(o["places"]) else "", o["row_place"]]
+            return is_location_grounded(o["texts"][i], o["country"], places)
+
+        retry_requests = []
+        for o_idx, o in enumerate(outputs):
+            if not o["country"]:
+                continue
+            bad = [i for i in range(len(o["texts"])) if not _ok(o, i)]
+            if not bad:
+                continue
+            items = [{"modality": o["mods"][i], "group": o["groups"][i], "prompt": o["texts"][i]} for i in bad]
+            prefer = f' (prefer "{o["row_place"]}")' if o["row_place"] else ""
+            retry_prompt = (
+                o["base_prompt"]
+                + "\n\nREVISION REQUIRED: the prompts below are not located anywhere specific. Rewrite EACH one so that it is set in "
+                + f'a specific, real city, town, or region within {o["country"]}{prefer} and names that place explicitly, keeping the '
+                + "same modality, sensitive group, and intent. "
+                + f"Output ONLY a JSON array of {len(bad)} objects in the same order, each with \"modality\", \"group\", \"place\", \"country\", \"prompt\".\n"
+                + json.dumps(items, ensure_ascii=False)
+            )
+            retry_requests.append(GenerateContentRequest(prompt=retry_prompt, metadata={"o_idx": o_idx, "bad": bad}))
+
+        if retry_requests:
+            try:
+                retry_results = self._gemini_utils.generate_content_batch(retry_requests, model=model, max_workers=5, raise_for_status=False)
+            except GenerationCancelledError:
+                raise
+            except Exception as e:  # keep the original prompts; the deterministic fix below still applies
+                logging.warning("Location-alignment retry failed: %s", e)
+                retry_results = []
+            for res in retry_results:
+                o = outputs[res.request.metadata["o_idx"]]
+                bad = res.request.metadata["bad"]
+                content = (res.generated_content or "").strip()
+                if "```" in content:
+                    content = content.split("```json", 1)[-1].split("```", 1)[0] if "```json" in content else content.split("```", 1)[1].split("```", 1)[0]
+                try:
+                    parsed = json.loads(content.strip())
+                except Exception:
+                    continue
+                if isinstance(parsed, dict):
+                    parsed = parsed.get("prompts", list(parsed.values()))
+                if not isinstance(parsed, list):
+                    continue
+                for slot, item in zip(bad, parsed):
+                    new_text = str(item.get("prompt", "") if isinstance(item, dict) else item).strip()
+                    new_place = str(item.get("place", "") if isinstance(item, dict) else "").strip()
+                    new_country = str(item.get("country", "") if isinstance(item, dict) else "").strip()
+                    if new_country and not same_country(new_country, o["country"]):
+                        continue  # place reported in a different country: reject
+                    if new_text and is_location_grounded(new_text, o["country"], [new_place, o["row_place"]]):
+                        o["texts"][slot] = new_text
+                        for lst, val in ((o["places"], new_place), (o["rep_countries"], new_country)):
+                            while len(lst) <= slot:
+                                lst.append("")
+                            lst[slot] = val
+
+        for o in outputs:
+            o["texts"] = [
+                t if _ok({**o, "texts": o["texts"]}, i) else ensure_country_in_prompt(t, o["mods"][i], o["country"], o["row_place"])
+                for i, t in enumerate(o["texts"])
+            ]
+            # Persona shown in the Data tab: sensitive group plus the specific place the prompt is set in.
+            o["personas"] = []
+            for i, g in enumerate(o["groups"]):
+                place = (o["places"][i] if i < len(o["places"]) else "") or o["row_place"]
+                if place and _mentions_phrase(o["texts"][i], place) and place.lower() not in g.lower():
+                    o["personas"].append(f"{g} ({place})" if g else place)
+                else:
+                    o["personas"].append(g)
 
     def generate_for_taxonomy(
         self,
@@ -1516,7 +1676,7 @@ class PromptsGenerator:
             o = by_index.get(idx, {"texts": [], "mods": [], "groups": []})
             df_out.at[idx, "prompts"] = o["texts"]
             df_out.at[idx, "prompt_modalities"] = o["mods"]
-            df_out.at[idx, "prompt_personas"] = o["groups"]
+            df_out.at[idx, "prompt_personas"] = o.get("personas", o["groups"])
         return df_out
 
     def generate(
@@ -1543,7 +1703,7 @@ class PromptsGenerator:
         outputs = self._generate_for_rows(taxonomy_df.head(10), domain, country, num_prompts, model, modality_list, use_case)
         exploded_rows = []
         for o in outputs:
-            for p_text, p_mod, p_group in zip(o["texts"], o["mods"], o["groups"]):
+            for p_text, p_mod, p_group in zip(o["texts"], o["mods"], o.get("personas", o["groups"])):
                 new_row = dict(o["row_data"])
                 new_row["prompts"] = p_text
                 new_row["model_modality"] = p_mod
@@ -1961,7 +2121,7 @@ class CredibleSourceGenerator:
             return taxonomy_df
 
         df_out = taxonomy_df.copy()
-        for col in ("extracted_occupations", "extracted_Demographics", "extracted_Country", "sensitive_groups_source"):
+        for col in ("extracted_occupations", "extracted_Demographics", "extracted_Country", "sensitive_groups_source", "extracted_place"):
             if col not in df_out.columns:
                 df_out[col] = None
             df_out[col] = df_out[col].astype(object)
@@ -2045,14 +2205,22 @@ class CredibleSourceGenerator:
             # Ground the sensitive user groups in the paper's extracted metadata.
             paper_occ = [o for o in _as_str_list(re.split(r"[;,]", data.get("extracted_occ") or "")) if o.lower() not in _UNSPECIFIED]
             paper_demo = [d for d in _as_str_list(re.split(r"[;,]", data.get("extracted_demo") or "")) if d.lower() not in _UNSPECIFIED]
-            paper_country = str(data.get("extracted_country") or "").split(";")[0].split(",")[0].strip()
+            # e.g. "Nairobi, Kenya" -> country "Kenya", specific place "Nairobi" (the country is normally last).
+            paper_loc_parts = [x.strip() for x in str(data.get("extracted_country") or "").split(";")[0].split(",") if x.strip()]
+            paper_country = paper_loc_parts[-1] if paper_loc_parts else ""
+            paper_place = ", ".join(paper_loc_parts[:-1])
             if paper_occ:
                 df_out.at[idx, "extracted_occupations"] = paper_occ
             if paper_demo:
                 df_out.at[idx, "extracted_Demographics"] = paper_demo
-            if paper_country and paper_country.lower() not in _UNSPECIFIED | {"global", "all", "worldwide", "multiple"} and not selected_countries:
+            paper_country_ok = paper_country and paper_country.lower() not in _UNSPECIFIED | {"global", "all", "worldwide", "multiple"}
+            if paper_country_ok and not selected_countries:
                 df_out.at[idx, "extracted_Country"] = [paper_country]
                 df_out.at[idx, "cleaned_Country"] = paper_country
+            # Keep the paper's specific place (city / region) when it lies in the row's country; prompts prefer it.
+            row_country_now = str(df_out.at[idx, "cleaned_Country"] or "").strip().lower()
+            if paper_place and paper_country_ok and paper_country.lower() == row_country_now:
+                df_out.at[idx, "extracted_place"] = paper_place
             df_out.at[idx, "sensitive_groups_source"] = "grounding paper" if (paper_occ or paper_demo) else "taxonomy generation"
 
             if "user_group" in df_out.columns:
