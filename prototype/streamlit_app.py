@@ -2178,9 +2178,24 @@ elif st.session_state.step == "Data":
 
         df_work = df[cols_needed].copy()
 
-        # Explode prompts if they are lists
+        # Per-prompt target modality (dynamic mode): "prompt_modalities" is a list parallel to "prompts"
+        # (taxonomy generation) and "prompt_modality" a scalar (one-prompt rows from "+10 More Prompts").
+        def _per_prompt_modalities(row_idx):
+            p_val = df.at[row_idx, 'prompts'] if 'prompts' in df.columns else None
+            pm_list = df.at[row_idx, 'prompt_modalities'] if 'prompt_modalities' in df.columns else None
+            pm_one = df.at[row_idx, 'prompt_modality'] if 'prompt_modality' in df.columns else None
+            pm_one = pm_one if isinstance(pm_one, str) and pm_one.strip() else None
+            if isinstance(p_val, list):
+                if isinstance(pm_list, list) and len(pm_list) == len(p_val):
+                    return list(pm_list)
+                return [pm_one] * len(p_val)
+            return pm_one
+
+        df_work['_prompt_modality'] = [_per_prompt_modalities(i) for i in df_work.index]
+
+        # Explode prompts if they are lists (together with their per-prompt modality)
         if df_work['prompts'].apply(lambda x: isinstance(x, list)).any():
-            df_work = df_work.explode('prompts')
+            df_work = df_work.explode(['prompts', '_prompt_modality'])
 
         # Format level3 as comma-separated keywords if list
         if df_work['level3'].apply(lambda x: isinstance(x, list)).any():
@@ -2211,11 +2226,16 @@ elif st.session_state.step == "Data":
         # Split and use all modalities selected on Concept page equally across rows in dynamic mode; filter in static mode
         if user_modalities:
             if is_dynamic:
-                df_work['model_modality'] = [user_modalities[i % len(user_modalities)] for i in range(len(df_work))]
+                # Keep the modality each prompt was written for; round-robin only when it is unknown.
+                df_work['model_modality'] = [
+                    pm if isinstance(pm, str) and pm in user_modalities else user_modalities[i % len(user_modalities)]
+                    for i, pm in enumerate(df_work['_prompt_modality'].tolist())
+                ]
             else:
                 df_modal_match = df_work[df_work['model_modality'].isin(user_modalities)]
                 if not df_modal_match.empty:
                     df_work = df_modal_match.copy()
+        df_work = df_work.drop(columns=['_prompt_modality'], errors='ignore')
         # Multi-signal complexity score
         def compute_complexity(text):
             text = str(text)
@@ -2696,7 +2716,9 @@ elif st.session_state.step == "Evaluation":
                 for idx, row in source_df.iterrows():
                     p_val = row['prompts']
                     if isinstance(p_val, list):
-                        for p in p_val:
+                        pm_list = row.get('prompt_modalities')
+                        pm_list = pm_list if isinstance(pm_list, list) and len(pm_list) == len(p_val) else None
+                        for p_i, p in enumerate(p_val):
                             if str(p).strip():
                                 prompts_to_eval.append({
                                     "prompts": str(p).strip(),
@@ -2704,7 +2726,7 @@ elif st.session_state.step == "Evaluation":
                                     "level2": row.get('level2', 'General'),
                                     "level3": row.get('level3', 'General'),
                                     "country": row.get('extracted_Country', row.get('cleaned_Country', 'Global')),
-                                    "model_modality": row.get('model_modality', user_modalities[0] if user_modalities else 'text-to-text'),
+                                    "model_modality": (pm_list[p_i] if pm_list else None) or row.get('model_modality', user_modalities[0] if user_modalities else 'text-to-text'),
                                 })
                     elif str(p_val).strip():
                         prompts_to_eval.append({
@@ -2854,6 +2876,7 @@ elif st.session_state.step == "Evaluation":
                                                         "level2": r.get("level2", "General"),
                                                         "level3": r.get("level3", "General"),
                                                         "country": r.get("extracted_Country", "Global"),
+                                                        "model_modality": r.get("model_modality", "text-to-text"),
                                                     })
                                             batch_df = pd.concat([batch_df, pd.DataFrame(new_rows)], ignore_index=True).drop_duplicates(subset=['prompts']).head(50)
                                             bg_store["total_queries"] = max(len(batch_df), 1) * max(len(models_copy), 1)
@@ -3262,6 +3285,7 @@ elif st.session_state.step == "Evaluation":
                                                         "level2": r.get("level2", "General"),
                                                         "level3": r.get("level3", "General"),
                                                         "country": r.get("extracted_Country", "Global"),
+                                                        "model_modality": r.get("model_modality", "text-to-text"),
                                                     })
 
                                     def _bg_more_progress(pct, msg):
