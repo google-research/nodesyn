@@ -2180,22 +2180,24 @@ elif st.session_state.step == "Data":
 
         # Per-prompt target modality (dynamic mode): "prompt_modalities" is a list parallel to "prompts"
         # (taxonomy generation) and "prompt_modality" a scalar (one-prompt rows from "+10 More Prompts").
-        def _per_prompt_modalities(row_idx):
+        # Likewise "prompt_personas" / "prompt_persona" hold the persona each prompt was written for.
+        def _per_prompt_values(row_idx, list_col, scalar_col):
             p_val = df.at[row_idx, 'prompts'] if 'prompts' in df.columns else None
-            pm_list = df.at[row_idx, 'prompt_modalities'] if 'prompt_modalities' in df.columns else None
-            pm_one = df.at[row_idx, 'prompt_modality'] if 'prompt_modality' in df.columns else None
-            pm_one = pm_one if isinstance(pm_one, str) and pm_one.strip() else None
+            v_list = df.at[row_idx, list_col] if list_col in df.columns else None
+            v_one = df.at[row_idx, scalar_col] if scalar_col in df.columns else None
+            v_one = v_one if isinstance(v_one, str) and v_one.strip() else None
             if isinstance(p_val, list):
-                if isinstance(pm_list, list) and len(pm_list) == len(p_val):
-                    return list(pm_list)
-                return [pm_one] * len(p_val)
-            return pm_one
+                if isinstance(v_list, list) and len(v_list) == len(p_val):
+                    return list(v_list)
+                return [v_one] * len(p_val)
+            return v_one
 
-        df_work['_prompt_modality'] = [_per_prompt_modalities(i) for i in df_work.index]
+        df_work['_prompt_modality'] = [_per_prompt_values(i, 'prompt_modalities', 'prompt_modality') for i in df_work.index]
+        df_work['_prompt_persona'] = [_per_prompt_values(i, 'prompt_personas', 'prompt_persona') for i in df_work.index]
 
-        # Explode prompts if they are lists (together with their per-prompt modality)
+        # Explode prompts if they are lists (together with their per-prompt modality and persona)
         if df_work['prompts'].apply(lambda x: isinstance(x, list)).any():
-            df_work = df_work.explode(['prompts', '_prompt_modality'])
+            df_work = df_work.explode(['prompts', '_prompt_modality', '_prompt_persona'])
 
         # Format level3 as comma-separated keywords if list
         if df_work['level3'].apply(lambda x: isinstance(x, list)).any():
@@ -2236,6 +2238,13 @@ elif st.session_state.step == "Data":
                 if not df_modal_match.empty:
                     df_work = df_modal_match.copy()
         df_work = df_work.drop(columns=['_prompt_modality'], errors='ignore')
+        if is_dynamic:
+            # Persona each prompt was written for (falls back to the branch's user group).
+            df_work['persona'] = [
+                str(pp).strip() if isinstance(pp, str) and pp.strip() else str(ug)
+                for pp, ug in zip(df_work['_prompt_persona'].tolist(), df_work['user_group'].tolist())
+            ]
+        df_work = df_work.drop(columns=['_prompt_persona'], errors='ignore')
         # Multi-signal complexity score
         def compute_complexity(text):
             text = str(text)
@@ -2440,14 +2449,21 @@ elif st.session_state.step == "Data":
 <h4 style="margin: 0; font-size: 12px; font-weight: 900; color: #334155; text-transform: uppercase; letter-spacing: 0.1em;">Data Inspector</h4>
 </div>
 """, unsafe_allow_html=True)
-        gt_df = df_work[['level1', 'level2', 'level3', 'model_modality', 'prompts', 'complexity', 'extracted_Country', 'Domain']].copy()
+        # In dynamic mode also show who each prompt was written for (user group + generated persona).
+        inspector_cols = ['level1', 'level2', 'level3', 'model_modality']
+        if is_dynamic and 'persona' in df_work.columns:
+            inspector_cols += ['user_group', 'persona']
+        inspector_cols += ['prompts', 'complexity', 'extracted_Country', 'Domain']
+        gt_df = df_work[inspector_cols].copy()
 
         # Rename columns for spreadsheet appearance
-        display_df = gt_df[['level1', 'level2', 'level3', 'model_modality', 'prompts', 'complexity', 'extracted_Country', 'Domain']].rename(columns={
+        display_df = gt_df[inspector_cols].rename(columns={
             'level1': 'L1 Category',
             'level2': 'L2 Subtopic',
             'level3': 'L3 Leaf',
             'model_modality': 'Modality',
+            'user_group': 'User Group',
+            'persona': 'Persona',
             'prompts': 'Synthetic Prompt',
             'complexity': 'Complexity Score',
             'extracted_Country': 'Country',
@@ -2537,6 +2553,8 @@ elif st.session_state.step == "Data":
                 "L2 Subtopic": st.column_config.TextColumn("L2 Subtopic", width="medium"),
                 "L3 Leaf": st.column_config.TextColumn("L3 Leaf", width="medium"),
                 "Modality": st.column_config.TextColumn("Modality", width="small"),
+                "User Group": st.column_config.TextColumn("User Group", width="small"),
+                "Persona": st.column_config.TextColumn("Persona", width="medium"),
                 "Synthetic Prompt": st.column_config.TextColumn("Synthetic Prompt", width="large"),
                 "Complexity Score": st.column_config.NumberColumn("Complexity Score", format="%.1f/10"),
             }
