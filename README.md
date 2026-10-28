@@ -66,7 +66,15 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for details.
 
 **Prerequisite:** Python **3.11 or newer**. Check your version with `python3 --version`. `./run.sh` verifies this automatically and will stop with instructions if only an older Python is found.
 
-Clone the repository, then navigate to the `prototype` directory:
+**Already cloned the repository before?** Get the latest code first, then skip the clone step below:
+
+```bash
+cd nodesyn
+git pull
+cd prototype
+```
+
+Otherwise, clone the repository, then navigate to the `prototype` directory:
 
 ```bash
 git clone https://github.com/google-research/nodesyn.git
