@@ -6,3 +6,4 @@ openai
 anthropic
 requests
 httpx
+certifi

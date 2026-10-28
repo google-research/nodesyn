@@ -11,6 +11,7 @@ import textwrap
 import threading
 import time
 from typing import Any
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -28,6 +29,21 @@ try:
     import anthropic
 except ImportError:
     anthropic = None
+
+try:
+    import certifi
+except ImportError:
+    certifi = None
+
+
+def _get_ssl_context() -> ssl.SSLContext:
+    """SSL context backed by certifi's CA bundle when available (avoids missing system CAs, e.g. on macOS Python)."""
+    if certifi is not None:
+        try:
+            return ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            pass
+    return ssl.create_default_context()
 
 
 def get_configured_api_keys() -> dict[str, str]:
@@ -1109,6 +1125,22 @@ def parse_persona_prompts(
     return texts, mods, personas
 
 
+_LANGUAGE_LABELS = {
+    "en": "English", "es": "Spanish", "pt": "Portuguese", "pt-br": "Brazilian Portuguese", "id": "Indonesian",
+    "hi": "Hindi", "ar": "Arabic", "fr": "French", "de": "German", "zh": "Chinese", "ja": "Japanese", "ko": "Korean",
+    "bn": "Bengali", "sw": "Swahili", "tr": "Turkish", "vi": "Vietnamese", "th": "Thai", "ru": "Russian", "ur": "Urdu",
+    "ta": "Tamil", "te": "Telugu", "mr": "Marathi",
+}
+
+
+def resolve_language_spec(language_code: str | None) -> tuple[str, str, bool]:
+    """Normalizes a language code from the Concept tab. Returns (normalized_code, human_label, is_english)."""
+    code = str(language_code or "en").strip().lower().replace("_", "-") or "en"
+    label = _LANGUAGE_LABELS.get(code) or _LANGUAGE_LABELS.get(code.split("-")[0]) or code
+    is_english = code == "en" or code.startswith("en-") or label.lower() == "english"
+    return code, label, is_english
+
+
 _COUNTRY_ALIASES = {
     "united states": ["united states", "usa", "u.s.", "america", "american"],
     "usa": ["united states", "usa", "u.s.", "america", "american"],
@@ -1128,10 +1160,24 @@ def mentions_country(text: str, country: str) -> bool:
 
 
 def _mentions_phrase(text: str, phrase: str) -> bool:
-    phrase = str(phrase or "").strip().lower()
-    if len(phrase) < 3:
-        return False
-    return re.search(r"(?<![a-z])" + re.escape(phrase) + r"(?![a-z])", f" {str(text).lower()} ") is not None
+    """True if `phrase` (or its first comma-separated part, e.g. "Nairobi" of "Nairobi, Kenya") appears in `text`.
+
+    ASCII phrases use word boundaries; phrases with non-ASCII characters (Japanese, Hindi, Arabic, Chinese, ...) use
+    case-folded substring matching, since those scripts have no ASCII word boundaries.
+    """
+    text_cf = str(text or "").casefold()
+    full = str(phrase or "").strip()
+    candidates = [full] + ([full.split(",")[0].strip()] if "," in full else [])
+    for cand in candidates:
+        cand_cf = cand.casefold()
+        if not cand_cf:
+            continue
+        if any(ord(ch) > 127 for ch in cand_cf):
+            if len(cand_cf) >= 2 and cand_cf in text_cf:
+                return True
+        elif len(cand_cf) >= 3 and re.search(r"(?<![a-z])" + re.escape(cand_cf) + r"(?![a-z])", f" {text_cf} "):
+            return True
+    return False
 
 
 def same_country(a: str, b: str) -> bool:
@@ -1153,10 +1199,13 @@ def is_location_grounded(text: str, country: str, places: list[str] | None = Non
     return mentions_country(text, country)
 
 
-def ensure_country_in_prompt(text: str, modality: str, country: str, place: str = "") -> str:
+def ensure_country_in_prompt(text: str, modality: str, country: str, place: str = "", language_code: str = "en") -> str:
     """Last-resort deterministic fix for a prompt that names neither a place in the country nor the country.
-    Prefers the specific place (e.g. "Nairobi, Kenya") over the broad country label."""
+    Prefers the specific place (e.g. "Nairobi, Kenya") over the broad country label. For non-English prompts the text
+    is returned unchanged, so English is never appended to a prompt written in another language."""
     if not country or is_location_grounded(text, country, [place]):
+        return text
+    if not resolve_language_spec(language_code)[2]:
         return text
     where = f"{place}, {country}" if place and place.strip().lower() != country.strip().lower() else country
     text = str(text).rstrip()
@@ -1439,13 +1488,28 @@ class PromptsGenerator:
         use_case: str,
         slot_modalities: list[str],
         place: str = "",
+        language_code: str = "en",
     ) -> str:
+        code, lang_label, is_english = resolve_language_spec(language_code)
         kw_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
         occ_str = ", ".join(occupations) if occupations else "N/A"
         demo_str = ", ".join(demographics) if demographics else "N/A"
         country_str = country if country else "one single country of your choice (the same country for every prompt)"
         modality_str = ", ".join(dict.fromkeys(slot_modalities))
         n = len(slot_modalities)
+        target_language_line = "" if is_english else f"\n        • Target Language: {lang_label} ({code})"
+        culture_clause = (
+            "Use only names, places, institutions, languages, and cultural details from"
+            if is_english
+            else "Use only names, places, institutions, and cultural details from"
+        )
+        language_requirement = "" if is_english else (
+            f"\n        CRITICAL LANGUAGE REQUIREMENT: write every \"prompt\" value 100% naturally and idiomatically in {lang_label} ({code}), "
+            "including the image-generation and video-generation instruction phrasing (never start with English phrases such as "
+            "\"Create an image of\", \"Show\", or \"Generate a video of\"), and translate the keyterms naturally without English glosses. "
+            "Keep the JSON fields \"modality\", \"group\", and \"country\" in English, and set \"place\" to the exact city / town / region "
+            "substring exactly as it is written inside \"prompt\"."
+        )
         return textwrap.dedent(f"""\
         As a model evaluation researcher specializing in prompt generation from diverse user perspectives, generate specific prompts.
         • Domain: {domain}
@@ -1456,13 +1520,13 @@ class PromptsGenerator:
           – Demographics: {demo_str}
           – Country/Region: {country_str}{f" (research setting: {place})" if place else ""}
         • Use Case: {use_case}
-        • LLM Evaluation Modality: {modality_str}
+        • LLM Evaluation Modality: {modality_str}{target_language_line}
         Your task is to generate diverse prompts that reflect the unique concerns and language of each identified sensitive group for the given use case and evaluation modality. Do not provide rationale, we just want clean prompts.
 
         Generate exactly {n} prompts, one per slot below. Each slot has a required modality; write the prompt in the form that modality expects:
 {format_prompt_slots(slot_modalities)}
         Each prompt must speak from, or depict, a member of the sensitive user groups above (an occupation and/or demographic), using their concerns and language. Use a different sensitive group for each prompt.
-        Every prompt must be set in a specific, real city, town, or region within {country_str}{f" (prefer {place})" if place else ""} and must name that place explicitly; prefer a specific place over the broad country label (naming the place is enough). Use only names, places, institutions, languages, and cultural details from {country_str}. Never set a prompt in any other country.
+        Every prompt must be set in a specific, real city, town, or region within {country_str}{f" (prefer {place})" if place else ""} and must name that place explicitly; prefer a specific place over the broad country label (naming the place is enough). {culture_clause} {country_str}. Never set a prompt in any other country.{language_requirement}
         Output ONLY a JSON array of {n} objects, one per slot in order: [{{"modality": "<slot modality>", "group": "<the occupation / demographic the prompt represents>", "place": "<the city / town / region named in the prompt>", "country": "<the country that place is in>", "prompt": "<the prompt text>"}}]
         """)
 
@@ -1504,6 +1568,7 @@ class PromptsGenerator:
         model: str,
         modality_list: list[str],
         use_case: str | None = None,
+        language_code: str = "en",
     ) -> list[dict[str, Any]]:
         """Returns, per input row (in order): row_data plus parallel lists of prompt texts, modalities and groups."""
         requests = []
@@ -1514,6 +1579,7 @@ class PromptsGenerator:
             prompt_text = self._generate_prompt(
                 domain, inputs["level1"], inputs["level2"], inputs["keywords"], inputs["occupations"],
                 inputs["demographics"], inputs["country"], inputs["use_case"], slot_modalities, place=inputs["place"],
+                language_code=language_code,
             )
             requests.append(GenerateContentRequest(
                 prompt=prompt_text,
@@ -1545,11 +1611,26 @@ class PromptsGenerator:
                             item["persona"] = item["group"]
                 texts, mods, groups = parse_persona_prompts(parsed, slot_modalities, modality_list, places_out=places, countries_out=rep_countries)
             except Exception:
-                cleaned = re.sub(r'^\d+[\.\)]\s*', '', content, flags=re.MULTILINE)
-                items = [re.sub(r'^[-\*\•]\s*', '', line).strip() for line in cleaned.split('\n') if line.strip()]
+                # The array failed to parse (e.g. unescaped quotes in one prompt): salvage the valid objects individually.
+                salvaged = []
+                for m_obj in re.finditer(r"\{[^{}]+\}", content):
+                    try:
+                        obj = json.loads(m_obj.group(0))
+                    except Exception:
+                        continue
+                    if isinstance(obj, dict):
+                        if "group" in obj and "persona" not in obj:
+                            obj["persona"] = obj["group"]
+                        salvaged.append(obj)
                 places, rep_countries = [], []
-                texts, mods, groups = parse_persona_prompts(items[:num_prompts], slot_modalities, modality_list, places_out=places, countries_out=rep_countries)
+                if salvaged:
+                    texts, mods, groups = parse_persona_prompts(salvaged, slot_modalities, modality_list, places_out=places, countries_out=rep_countries)
+                else:
+                    cleaned = re.sub(r'^\d+[\.\)]\s*', '', content, flags=re.MULTILINE)
+                    items = [re.sub(r'^[-\*\•]\s*', '', line).strip() for line in cleaned.split('\n') if line.strip()]
+                    texts, mods, groups = parse_persona_prompts(items[:num_prompts], slot_modalities, modality_list, places_out=places, countries_out=rep_countries)
 
+            fallback_slots: set[int] = set()
             if len(texts) < len(slot_modalities):
                 # Fill any slots the model did not return with group- and modality-aware fallbacks.
                 kw_list = meta["keywords"] if isinstance(meta["keywords"], list) else [str(meta["keywords"])]
@@ -1561,6 +1642,7 @@ class PromptsGenerator:
                         part for part in [demo_opts[j % len(demo_opts)], occ_opts[j % len(occ_opts)]] if part
                     ).strip()
                     where = f"{meta['place']}, {meta['country']}" if meta["place"] else meta["country"]
+                    fallback_slots.add(len(texts))
                     texts.append(fallback_persona_prompt(slot_modalities[j], group.lower(), meta["level2"], kw_str, where))
                     mods.append(slot_modalities[j])
                     groups.append(group)
@@ -1568,18 +1650,29 @@ class PromptsGenerator:
                     rep_countries.append(meta["country"])
 
             outputs.append({"row_index": meta["row_index"], "row_data": meta["row_data"], "texts": texts, "mods": mods, "groups": groups,
-                            "places": places, "rep_countries": rep_countries, "country": meta["country"], "row_place": meta["place"], "base_prompt": req.prompt})
+                            "places": places, "rep_countries": rep_countries, "country": meta["country"], "row_place": meta["place"], "base_prompt": req.prompt,
+                            "fallback_slots": fallback_slots})
 
-        self._enforce_country(outputs, model)
+        self._enforce_country(outputs, model, language_code=language_code)
         return outputs
 
-    def _enforce_country(self, outputs: list[dict[str, Any]], model: str) -> None:
+    def _enforce_country(self, outputs: list[dict[str, Any]], model: str, language_code: str = "en") -> None:
         """Ensures every prompt is located in its row's country, preferring a specific place (city / region) within it.
 
         A prompt passes if it names a specific place within the country (reported by the generator or from the
         grounding paper) or the country itself. Non-compliant prompts get one batched retry; any still failing get a
         deterministic fix that adds the specific place (if known) or the country.
+
+        For non-English target languages, English fallback prompts are also sent for revision (to be rewritten in the
+        target language), and the deterministic English fix-up is skipped.
         """
+        code, lang_label, is_en = resolve_language_spec(language_code)
+
+        def _needs_revision(o: dict[str, Any], i: int) -> bool:
+            if not is_en and i in o.get("fallback_slots", set()):
+                return True  # English fallback text must be rewritten in the target language
+            return bool(o["country"]) and not _ok(o, i)
+
         def _ok(o: dict[str, Any], i: int) -> bool:
             reported = o["rep_countries"][i] if i < len(o["rep_countries"]) else ""
             if reported and not same_country(reported, o["country"]):
@@ -1589,17 +1682,21 @@ class PromptsGenerator:
 
         retry_requests = []
         for o_idx, o in enumerate(outputs):
-            if not o["country"]:
-                continue
-            bad = [i for i in range(len(o["texts"])) if not _ok(o, i)]
+            bad = [i for i in range(len(o["texts"])) if _needs_revision(o, i)]
             if not bad:
                 continue
             items = [{"modality": o["mods"][i], "group": o["groups"][i], "prompt": o["texts"][i]} for i in bad]
             prefer = f' (prefer "{o["row_place"]}")' if o["row_place"] else ""
+            location_req = (
+                f'set in a specific, real city, town, or region within {o["country"]}{prefer} and names that place explicitly'
+                if o["country"] else "set in a specific, real place and names that place explicitly"
+            )
+            language_req = "" if is_en else f", written 100% naturally in {lang_label} ({code})"
             retry_prompt = (
                 o["base_prompt"]
-                + "\n\nREVISION REQUIRED: the prompts below are not located anywhere specific. Rewrite EACH one so that it is set in "
-                + f'a specific, real city, town, or region within {o["country"]}{prefer} and names that place explicitly, keeping the '
+                + "\n\nREVISION REQUIRED: the prompts below are not located anywhere specific"
+                + ("" if is_en else f" or are not written in {lang_label}")
+                + f". Rewrite EACH one so that it is {location_req}{language_req}, keeping the "
                 + "same modality, sensitive group, and intent. "
                 + f"Output ONLY a JSON array of {len(bad)} objects in the same order, each with \"modality\", \"group\", \"place\", \"country\", \"prompt\".\n"
                 + json.dumps(items, ensure_ascii=False)
@@ -1636,6 +1733,7 @@ class PromptsGenerator:
                         continue  # place reported in a different country: reject
                     if new_text and is_location_grounded(new_text, o["country"], [new_place, o["row_place"]]):
                         o["texts"][slot] = new_text
+                        o.get("fallback_slots", set()).discard(slot)
                         for lst, val in ((o["places"], new_place), (o["rep_countries"], new_country)):
                             while len(lst) <= slot:
                                 lst.append("")
@@ -1643,7 +1741,7 @@ class PromptsGenerator:
 
         for o in outputs:
             o["texts"] = [
-                t if _ok({**o, "texts": o["texts"]}, i) else ensure_country_in_prompt(t, o["mods"][i], o["country"], o["row_place"])
+                t if _ok({**o, "texts": o["texts"]}, i) else ensure_country_in_prompt(t, o["mods"][i], o["country"], o["row_place"], language_code)
                 for i, t in enumerate(o["texts"])
             ]
             # Persona shown in the Data tab: sensitive group plus the specific place the prompt is set in.
@@ -1664,11 +1762,12 @@ class PromptsGenerator:
         model: str = "gemini-3.5-flash-lite",
         modality: list[str] | str | None = None,
         use_case: str | None = None,
+        language_code: str = "en",
     ) -> pd.DataFrame:
         """Adds per-branch prompt lists (prompts / prompt_modalities / prompt_personas) to a grounded taxonomy."""
         df_out = taxonomy_df.copy()
         modality_list = normalize_modalities(modality if modality else DEFAULT_MODALITIES)
-        outputs = self._generate_for_rows(df_out, domain, country, num_prompts, model, modality_list, use_case)
+        outputs = self._generate_for_rows(df_out, domain, country, num_prompts, model, modality_list, use_case, language_code=language_code)
         by_index = {o["row_index"]: o for o in outputs}
         for col in ("prompts", "prompt_modalities", "prompt_personas"):
             df_out[col] = pd.Series([None] * len(df_out), index=df_out.index, dtype=object)
@@ -1689,6 +1788,7 @@ class PromptsGenerator:
         model: str = "gemini-3.5-flash-lite",
         modality: list[str] | str | None = None,
         use_case: str | None = None,
+        language_code: str = "en",
     ) -> pd.DataFrame:
         """'+10 More Prompts': one row per new prompt, for the first 10 taxonomy rows."""
         if modality:
@@ -1700,7 +1800,7 @@ class PromptsGenerator:
         else:
             modality_list = list(DEFAULT_MODALITIES)
 
-        outputs = self._generate_for_rows(taxonomy_df.head(10), domain, country, num_prompts, model, modality_list, use_case)
+        outputs = self._generate_for_rows(taxonomy_df.head(10), domain, country, num_prompts, model, modality_list, use_case, language_code=language_code)
         exploded_rows = []
         for o in outputs:
             for p_text, p_mod, p_group in zip(o["texts"], o["mods"], o.get("personas", o["groups"])):
@@ -1719,7 +1819,12 @@ class PromptsGenerator:
 
 
 class CredibleSourceGenerator:
-    """Discovers reputable research papers via Google Search grounding to ground taxonomy relationships."""
+    """Discovers reputable research papers via web / academic search grounding to ground taxonomy relationships.
+
+    Grounding waterfall per branch: narrow L3 search (Domain + L2 + L3 keyterms) -> broad L2 fallback
+    (Domain + L1 + L2) -> "Could not find". Paper-extracted sensitive groups replace the taxonomy-step guesses only
+    when a paper is found ("Paper-Grounded"); otherwise the taxonomy-step groups are kept ("Model-Inferred").
+    """
 
     _STOPWORDS = {
         "with", "from", "that", "this", "study", "paper", "research", "review",
@@ -1728,6 +1833,14 @@ class CredibleSourceGenerator:
         "francis", "frontiers", "among", "between", "into", "their", "about",
         "using", "based", "effects", "impact", "role", "towards", "through",
     }
+    # Appendix D one-shot example (format illustration only); echoes of it must never be accepted as a citation.
+    _EXAMPLE_TITLE = "Impact of Automated Recruitment Algorithms on Ethnic Minority Candidates"
+    _NOT_FOUND_VALUES = {
+        "could not find", "not found", "none", "n/a", "na", "null", "no paper found", "no relevant paper found",
+        "non-existent paper",
+    }
+    _NOT_FOUND_PREFIXES = ("could not find", "no relevant paper", "non-existent")
+    _USER_AGENT = "NodeSynth-ResearchLibrarian/1.0 (mailto:research@example.com)"
 
     def __init__(self, gemini_utils: GeminiUtils):
         self._gemini_utils = gemini_utils
@@ -1743,6 +1856,69 @@ class CredibleSourceGenerator:
             return [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}]
         return None
 
+    # ------------------------------------------------------------------ academic search (non-Gemini providers)
+    @staticmethod
+    def _snippet(text: str, max_words: int = 55) -> str:
+        words = str(text or "").split()
+        return " ".join(words[:max_words]) + (" ..." if len(words) > max_words else "")
+
+    @classmethod
+    def _reconstruct_openalex_abstract(cls, inverted_index: dict[str, list[int]] | None, max_words: int = 55) -> str:
+        """Rebuilds a concise abstract snippet from OpenAlex's abstract_inverted_index."""
+        if not isinstance(inverted_index, dict) or not inverted_index:
+            return ""
+        positions: list[tuple[int, str]] = []
+        for word, idxs in inverted_index.items():
+            for i in idxs or []:
+                positions.append((int(i), str(word)))
+        positions.sort()
+        return cls._snippet(" ".join(w for _, w in positions), max_words)
+
+    @classmethod
+    def _search_openalex(cls, query: str, max_results: int) -> list[tuple[str, str, str]]:
+        params = {"search": query, "per-page": str(max_results)}
+        api_key = os.environ.get("OPENALEX_API_KEY")
+        if api_key:
+            params["api_key"] = api_key
+        api_url = "https://api.openalex.org/works?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(api_url, headers={"User-Agent": cls._USER_AGENT})
+        with urllib.request.urlopen(req, timeout=4.0, context=_get_ssl_context()) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        out: list[tuple[str, str, str]] = []
+        for item in data.get("results", []):
+            title = str(item.get("title") or item.get("display_name") or "").strip()
+            primary_loc = item.get("primary_location") or {}
+            landing_url = primary_loc.get("landing_page_url") or item.get("doi") or item.get("id") or ""
+            abstract = cls._reconstruct_openalex_abstract(item.get("abstract_inverted_index"))
+            if title and landing_url:
+                out.append((str(landing_url).strip(), title, abstract))
+        return out
+
+    @classmethod
+    def _search_crossref(cls, query: str, required_tokens: set[str]) -> list[tuple[str, str, str]]:
+        api_url = "https://api.crossref.org/works?" + urllib.parse.urlencode({"query": query, "rows": "6"})
+        req = urllib.request.Request(api_url, headers={"User-Agent": cls._USER_AGENT})
+        with urllib.request.urlopen(req, timeout=5.0, context=_get_ssl_context()) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        query_tokens = cls._title_tokens(query)
+        out: list[tuple[str, str, str]] = []
+        for item in (data.get("message") or {}).get("items", []):
+            titles = item.get("title") or []
+            title = re.sub(r"<[^>]+>", " ", str(titles[0] if titles else "")).strip()
+            title = re.sub(r"\s+", " ", title)
+            url = str(item.get("URL") or (f"https://doi.org/{item['DOI']}" if item.get("DOI") else "")).strip()
+            abstract_raw = re.sub(r"<[^>]+>", " ", str(item.get("abstract") or ""))  # strip HTML / JATS tags
+            abstract = cls._snippet(re.sub(r"\s+", " ", abstract_raw).strip())
+            if not title or not url:
+                continue
+            cand_tokens = cls._title_tokens(f"{title} {abstract}")
+            if required_tokens and not (required_tokens & cand_tokens):
+                continue  # narrow L3 pass: must overlap the keyterms
+            if query_tokens and not (query_tokens & cand_tokens):
+                continue
+            out.append((url, title, abstract))
+        return out
+
     @classmethod
     def _search_academic_papers(
         cls,
@@ -1750,81 +1926,99 @@ class CredibleSourceGenerator:
         category: str,
         topic: str,
         keywords_str: str,
-        max_results: int = 3,
-    ) -> list[tuple[str, str]]:
-        """Queries OpenAlex academic search API to provide real research paper grounding."""
-        queries = [
-            f"{domain} {topic} {keywords_str}".strip(),
-            f"{domain} {category} {topic}".strip(),
-        ]
-        pairs: list[tuple[str, str]] = []
+        max_results: int = 4,
+    ) -> list[tuple[str, str, str]]:
+        """Academic search (OpenAlex, falling back to Crossref) matching the active grounding-waterfall pass.
+
+        Narrow L3 pass (keywords_str non-empty): "<keyterms> <L2>", "<Domain> <L2> <keyterms>".
+        Broad L2 pass (keywords_str empty): "<Domain> <L1> <L2>", "<Domain> <L2>".
+        Returns (landing_url, title, abstract_snippet) tuples.
+        """
+        kw_clean = " ".join(str(keywords_str or "").replace(",", " ").split())
+        if kw_clean:
+            queries = [f"{kw_clean} {topic}", f"{domain} {topic} {kw_clean}"]
+        else:
+            queries = [f"{domain} {category} {topic}", f"{domain} {topic}"]
+        required_tokens = cls._title_tokens(kw_clean) if kw_clean else set()
+        results: list[tuple[str, str, str]] = []
         for raw_q in queries:
-            q_clean = re.sub(r"[^\w\s-]", " ", raw_q)
-            q_clean = " ".join(q_clean.split()[:10])
+            q_clean = " ".join(re.sub(r"[^\w\s-]", " ", raw_q).split()[:12])
             if not q_clean:
                 continue
-            api_url = (
-                f"https://api.openalex.org/works?search={urllib.parse.quote_plus(q_clean)}"
-                f"&per-page={max_results}"
-            )
-            req = urllib.request.Request(
-                api_url,
-                headers={"User-Agent": "NodeSynth-ResearchLibrarian/1.0 (mailto:research@example.com)"},
-            )
             try:
-                with urllib.request.urlopen(req, timeout=3.5) as resp:
-                    data = json.loads(resp.read().decode("utf-8", errors="ignore"))
-                for item in data.get("results", []):
-                    title = str(item.get("title") or item.get("display_name") or "").strip()
-                    primary_loc = item.get("primary_location") or {}
-                    landing_url = primary_loc.get("landing_page_url") or item.get("doi") or item.get("id") or ""
-                    if title and landing_url and all(landing_url != u for u, _ in pairs):
-                        pairs.append((str(landing_url).strip(), title))
-                if pairs:
-                    break
-            except Exception:
-                continue
-        return pairs[:max_results]
+                found = cls._search_openalex(q_clean, max_results)
+            except Exception as e:  # HTTP 429 / network / SSL issues -> Crossref fallback
+                logging.debug("OpenAlex search failed (%s); falling back to Crossref", e)
+                try:
+                    found = cls._search_crossref(q_clean, required_tokens)
+                except Exception as e2:
+                    logging.debug("Crossref search failed: %s", e2)
+                    found = []
+            for url, title, abstract in found:
+                if all(url != u for u, _, _ in results):
+                    results.append((url, title, abstract))
+            if results:
+                break
+        return results[:max_results]
 
+    # ------------------------------------------------------------------ grounding prompt
     def _generate_prompt(
         self,
         domain: str,
         category: str,
         topic: str,
         keywords: str | list[str],
-        candidate_papers: list[tuple[str, str]] | None = None,
+        candidate_papers: list[tuple] | None = None,
     ) -> str:
         if isinstance(keywords, list):
             keywords_str = ", ".join(str(k) for k in keywords)
         else:
-            keywords_str = str(keywords)
+            keywords_str = str(keywords or "")
+        scope = (
+            f"specifically {topic} within the context of {keywords_str}" if keywords_str.strip()
+            else f"specifically {topic} under {category}"
+        )
 
         candidate_section = ""
         if candidate_papers:
-            lines = [f"- Title: {t} | URL: {u}" for u, t in candidate_papers if t and u]
+            lines = []
+            for cand in candidate_papers:
+                u, t = cand[0], cand[1]
+                abstract = cand[2] if len(cand) > 2 else ""
+                if t and u:
+                    lines.append(f"- Title: {t} | URL: {u}" + (f"\n  Abstract snippet: {abstract}" if abstract else ""))
             if lines:
                 candidate_section = (
-                    "\nReference Academic Search Results (you may use one of these real papers or another real paper from your web search tool):\n"
-                    + "\n".join(lines)
-                    + "\n"
+                    "\nReference Academic Search Results (real papers from an academic index; you may cite one of these "
+                    "or a real paper from your live web search results):\n" + "\n".join(lines) + "\n"
                 )
 
         prompt = textwrap.dedent(f"""\
         You are a research librarian specializing in {domain} research with a focus on {category}.
-        Your task is to use web search to find 1 real, existing published research paper directly related to {domain}, specifically {topic} within the context of {keywords_str}.
+        Your task is to use web search to find 1 real, existing published research paper directly related to {domain}, {scope}.
         {candidate_section}
         CRITICAL INSTRUCTIONS:
-        - ONLY cite a real paper that appears in your search results. Do NOT invent or guess paper titles or URLs.
+        - Cite ONLY a real published paper that appears in your live web search tool results or in the Reference Academic Search Results above. Never recall or guess a paper title or URL from memory alone.
+        - If neither your search results nor the reference results contain a directly relevant published paper, output exactly: Title: Could not find ;
         - The Title MUST match the exact title of the paper at the URL you provide.
         - Based on the paper content, extract the specific sensitive group of people (occupation, demographic group, and country) evaluated or affected in this research paper. Do NOT use "General Public".
-        
+        - Keep Occupation, Demographics, and Country as short, precise noun phrases with no parenthetical explanations (e.g. never "Nurses (in rural clinics)") and no rationale.
+        - Country: return a single primary country (or "<City>, <Country>"), or "Global" if the paper covers multiple countries.
+
         The output should be formatted as:
         Title: <exact paper title from search result> ;
         Occupation: <specific occupation(s)> ;
         Demographics: <specific demographic group(s)> ;
         Country: <country/region> ;
         URL: <exact direct paper URL from search result> ;
-        
+
+        ONE-SHOT EXAMPLE (format illustration only — do NOT copy this paper):
+        Title: {self._EXAMPLE_TITLE} ;
+        Occupation: Software Engineers, Human Resource Managers ;
+        Demographics: African American, Hispanic, Female ;
+        Country: United States ;
+        URL: https://example.org/paper ;
+
         Please strictly follow this format, ONLY return these five items (Title, Occupation, Demographics, Country, URL), keep words short and precise, and do not add rationale.
         """)
         return prompt
@@ -1860,7 +2054,7 @@ class CredibleSourceGenerator:
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=3.5) as resp:
+            with urllib.request.urlopen(req, timeout=3.5, context=_get_ssl_context()) as resp:
                 status = getattr(resp, "status", 200)
                 final_url = resp.geturl() or url
                 if status and status >= 400:
@@ -1872,7 +2066,7 @@ class CredibleSourceGenerator:
             if e.code in (400, 404, 410) or e.code >= 500:
                 return False, final_url, "", 0
             # Some academic publishers return 403/429 to automated requests; accept only if
-            # the URL came from Google Search grounding and the chunk title / URL slug matches.
+            # the URL came from search grounding and the chunk title / URL slug matches.
             if is_grounding and expected_tokens:
                 cand_tokens = cls._title_tokens(f"{chunk_title} { urllib.parse.unquote(final_url) }")
                 overlap = len(expected_tokens & cand_tokens)
@@ -1912,6 +2106,11 @@ class CredibleSourceGenerator:
             return True, final_url, html_title, 1
         return False, final_url, html_title, 0
 
+    @classmethod
+    def _is_not_found(cls, title: str) -> bool:
+        t = str(title or "").strip().strip(".").lower()
+        return (not t) or t in cls._NOT_FOUND_VALUES or t.startswith(cls._NOT_FOUND_PREFIXES)
+
     def _parse_result(
         self,
         result: GenerateContentResult,
@@ -1922,7 +2121,8 @@ class CredibleSourceGenerator:
     ) -> dict[str, Any]:
         grounding_pairs: list[tuple[str, str]] = []
         full_response = result.full_response
-        content = result.generated_content.strip()
+        # Strip inline <cite ...>...</cite> tags emitted by Anthropic web search before regex extraction.
+        content = re.sub(r"</?cite[^>]*>", "", result.generated_content or "").strip()
 
         # 1. Grounding Metadata from provider search chunks (keep URI and title paired)
         if full_response and hasattr(full_response, "candidates") and full_response.candidates:
@@ -1965,48 +2165,50 @@ class CredibleSourceGenerator:
                     if uri and all(uri != u for u, _ in grounding_pairs):
                         grounding_pairs.append((uri, title))
 
-        # 1d. Pre-fetched academic search grounding pairs (OpenAlex)
+        # 1d. Pre-fetched academic search grounding results (2- or 3-tuples: url, title[, abstract])
         meta_pairs = (result.request.metadata or {}).get("search_grounding_pairs") or []
-        for uri, title in meta_pairs:
+        for pair in meta_pairs:
+            uri, title = pair[0], pair[1]
             if uri and all(uri != u for u, _ in grounding_pairs):
                 grounding_pairs.append((uri, title))
+        grounding_pairs = [(u, t) for u, t in grounding_pairs if "example.org" not in str(u)]
 
-        # 2. Parse text content
-        t_m = re.search(r'(?:\*{0,2}Title\*{0,2}:|\*{0,2}Title:\*{0,2})\s*([^\n;]+)', content, re.IGNORECASE)
-        occ_match = re.search(r'(?:\*{0,2}Occupation\*{0,2}:|\*{0,2}Occupation:\*{0,2})\s*([^\n;]+)', content, re.IGNORECASE)
-        demo_match = re.search(r'(?:\*{0,2}Demographics\*{0,2}:|\*{0,2}Demographics:\*{0,2})\s*([^\n;]+)', content, re.IGNORECASE)
-        country_match = re.search(r'(?:\*{0,2}Country\*{0,2}:|\*{0,2}Country:\*{0,2})\s*([^\n;]+)', content, re.IGNORECASE)
+        # 2. Parse text content: take the LAST match of each field (the model may echo the one-shot example first).
+        def _last(field: str) -> str:
+            matches = re.findall(rf"(?:\*{{0,2}}{field}\*{{0,2}}:|\*{{0,2}}{field}:\*{{0,2}})\s*([^\n;]+)", content, re.IGNORECASE)
+            return re.sub(r'[*"\'`]', "", matches[-1]).strip() if matches else ""
 
-        extracted_title = re.sub(r'[*"\'`]', '', t_m.group(1)).strip() if t_m else ""
-        extracted_occ = re.sub(r'[*"\'`]', '', occ_match.group(1)).strip() if occ_match else ""
-        extracted_demo = re.sub(r'[*"\'`]', '', demo_match.group(1)).strip() if demo_match else ""
-        extracted_country = re.sub(r'[*"\'`]', '', country_match.group(1)).strip() if country_match else ""
+        extracted_title = _last("Title")
+        extracted_occ = _last("Occupation")
+        extracted_demo = _last("Demographics")
+        extracted_country = _last("Country")
+        if extracted_title.strip().lower() == self._EXAMPLE_TITLE.lower():
+            extracted_title = ""  # echoed one-shot example, not a real citation
 
         text_urls: list[str] = []
-        u_m = re.search(r'(?:URL|Link)[*:\s]+(?:\[[^\]]*\]\()?(https?://[^\s<>"\'\)\];,]+)', content, re.IGNORECASE)
-        if u_m:
-            u_val = u_m.group(1).strip().rstrip(".")
-            if u_val not in text_urls:
+        url_matches = re.findall(r'(?:URL|Link)[*:\s]+(?:\[[^\]]*\]\()?(https?://[^\s<>"\'\)\];,]+)', content, re.IGNORECASE)
+        for u_val in reversed(url_matches):
+            u_val = u_val.strip().rstrip(".")
+            if u_val not in text_urls and "example.org" not in u_val:
                 text_urls.append(u_val)
-
         for u in re.findall(r'https?://[^\s<>"\'\)\];,]+', content):
             u_clean = u.strip().rstrip(".")
-            if u_clean not in text_urls:
+            if u_clean not in text_urls and "example.org" not in u_clean:
                 text_urls.append(u_clean)
 
+        # Never promote an unchosen search-result title: only the model's chosen Title counts.
         display_title = extracted_title
-        if not display_title and grounding_pairs:
-            for _, g_title in grounding_pairs:
-                if g_title and len(self._title_tokens(g_title)) >= 2:
-                    display_title = g_title.strip()
-                    break
 
-        if display_title and display_title.strip().lower() != "could not find":
+        if display_title and not self._is_not_found(display_title):
             best_url = ""
             best_score = 0
+            title_tokens = self._title_tokens(display_title)
+            ranked_pairs = sorted(
+                grounding_pairs, key=lambda pair: len(title_tokens & self._title_tokens(pair[1] or "")), reverse=True
+            )
 
-            # Check grounding chunks first
-            for g_uri, g_title in grounding_pairs[:4]:
+            # Check the best-matching grounding chunks first
+            for g_uri, g_title in ranked_pairs[:4]:
                 ok, resolved_url, _, score = self._verify_and_resolve_url(
                     g_uri, display_title, chunk_title=g_title, is_grounding=True
                 )
@@ -2058,6 +2260,142 @@ class CredibleSourceGenerator:
             "extracted_country": extracted_country if paper_found else "",
         }
 
+    # ------------------------------------------------------------------ waterfall execution
+    def _ground_rows(
+        self,
+        rows: list[dict[str, Any]],
+        domain: str,
+        model: str,
+        max_workers: int,
+    ) -> dict[Any, dict[str, Any]]:
+        """Runs one grounding pass for rows [{key, category, topic, keywords}] and returns parsed results by key."""
+        provider = get_model_provider(model)
+        requests = []
+        for r in rows:
+            candidate_papers = (
+                self._search_academic_papers(domain, r["category"], r["topic"], r["keywords"])
+                if provider != "gemini"
+                else []
+            )
+            prompt = self._generate_prompt(domain, r["category"], r["topic"], r["keywords"], candidate_papers=candidate_papers)
+            requests.append(GenerateContentRequest(
+                prompt=prompt,
+                metadata={
+                    "row_key": r["key"],
+                    "category": r["category"],
+                    "topic": r["topic"],
+                    "keywords": r["keywords"],
+                    "search_grounding_pairs": candidate_papers,
+                },
+            ))
+        if not requests:
+            return {}
+        tools = self._get_search_tools_for_model(model)
+        batch_res = self._gemini_utils.generate_content_batch(
+            requests, model=model, tools=tools, max_workers=max_workers, raise_for_status=True,
+        )
+        by_key = {res.request.metadata.get("row_key"): res for res in batch_res}
+        parsed: dict[Any, dict[str, Any]] = {}
+        for req in requests:
+            meta = req.metadata
+            res = by_key.get(meta["row_key"], GenerateContentResult(req, ""))
+            parsed[meta["row_key"]] = self._parse_result(
+                result=res, domain=domain, category=meta["category"], topic=meta["topic"], keywords_str=meta["keywords"],
+            )
+        return parsed
+
+    def _ground_with_waterfall(
+        self,
+        rows: list[dict[str, Any]],
+        domain: str,
+        model: str,
+        max_workers: int = 5,
+    ) -> dict[Any, dict[str, Any]]:
+        """L3 -> L2 -> "Could not find" waterfall. Adds `search_scope` to each parsed result:
+        "narrow_l3" (found with keyterms), "broad_l2_fallback" (found on Domain + L1 + L2), or "ungrounded"."""
+        results = self._ground_rows(rows, domain, model, max_workers)
+        for r in rows:
+            data = results.get(r["key"])
+            if data is not None and data["paper_titles"] != ["Could not find"]:
+                data["search_scope"] = "narrow_l3" if str(r["keywords"]).strip() else "broad_l2_fallback"
+        retry_rows = [
+            {**r, "keywords": ""}
+            for r in rows
+            if str(r["keywords"]).strip() and results.get(r["key"], {}).get("paper_titles") == ["Could not find"]
+        ]
+        if retry_rows:
+            broad = self._ground_rows(retry_rows, domain, model, max_workers)
+            for key, data in broad.items():
+                if data["paper_titles"] != ["Could not find"]:
+                    data["search_scope"] = "broad_l2_fallback"
+                    results[key] = data
+        for r in rows:
+            data = results.setdefault(r["key"], {
+                "paper_urls": [], "paper_titles": ["Could not find"], "url": [], "paper_content": "Could not find",
+                "extracted_occ": "", "extracted_demo": "", "extracted_country": "",
+            })
+            data.setdefault("search_scope", "ungrounded")
+        return results
+
+    @staticmethod
+    def apply_grounding_to_row(
+        df_out: pd.DataFrame,
+        idx: Any,
+        data: dict[str, Any],
+        selected_countries: list[str] | None = None,
+    ) -> None:
+        """Applies one grounding result to a taxonomy row (sensitive groups, country / place, provenance).
+
+        Paper-Grounded: the paper's occupations AND demographics cleanly replace the taxonomy-step guesses (never
+        mixed). Model-Inferred: the taxonomy-step groups are kept, without any fake citation. The paper's country is
+        only used when the user selected Global (no specific countries).
+        """
+        for col in ("extracted_occupations", "extracted_Demographics", "extracted_Country", "sensitive_groups_source",
+                    "extracted_place", "grounding_status", "grounding_search_scope"):
+            if col not in df_out.columns:
+                df_out[col] = None
+            if df_out[col].dtype != object:
+                df_out[col] = df_out[col].astype(object)
+
+        def _clean(raw: Any) -> str:
+            return re.sub(r"\s*\([^)]*\)", "", str(raw or "")).strip()  # drop inline parenthetical explanations
+
+        paper_found = data.get("paper_titles") not in (None, [], ["Could not find"])
+        paper_occ = [o for o in _as_str_list(re.split(r"[;,]", _clean(data.get("extracted_occ")))) if o.lower() not in _UNSPECIFIED]
+        paper_demo = [d for d in _as_str_list(re.split(r"[;,]", _clean(data.get("extracted_demo")))) if d.lower() not in _UNSPECIFIED]
+
+        if paper_found and (paper_occ or paper_demo):
+            df_out.at[idx, "extracted_occupations"] = paper_occ
+            df_out.at[idx, "extracted_Demographics"] = paper_demo
+            df_out.at[idx, "sensitive_groups_source"] = "grounding paper"
+            df_out.at[idx, "grounding_status"] = "Paper-Grounded"
+        else:
+            df_out.at[idx, "sensitive_groups_source"] = "taxonomy generation"
+            df_out.at[idx, "grounding_status"] = "Model-Inferred"
+        df_out.at[idx, "grounding_search_scope"] = data.get("search_scope", "ungrounded")
+
+        if paper_found:
+            # e.g. "Nairobi, Kenya" -> country "Kenya", specific place "Nairobi" (the country is normally last).
+            loc_parts = [x.strip() for x in _clean(data.get("extracted_country")).split(";")[0].split(",") if x.strip()]
+            paper_country = loc_parts[-1] if loc_parts else ""
+            paper_place = ", ".join(loc_parts[:-1])
+            country_ok = bool(paper_country) and paper_country.lower() not in _UNSPECIFIED | {"global", "all", "worldwide", "multiple"}
+            if country_ok and not selected_countries:
+                df_out.at[idx, "extracted_Country"] = [paper_country]
+                df_out.at[idx, "cleaned_Country"] = paper_country
+            # Keep the paper's specific place (city / region) when it lies in the row's country; prompts prefer it.
+            row_country_now = str((df_out.at[idx, "cleaned_Country"] if "cleaned_Country" in df_out.columns else "") or "").strip().lower()
+            if paper_place and country_ok and paper_country.lower() == row_country_now:
+                df_out.at[idx, "extracted_place"] = paper_place
+
+        if "user_group" in df_out.columns:
+            curr_ug = str(df_out.at[idx, "user_group"] or "").strip()
+            if not curr_ug or curr_ug.lower() in ("general public", "general population", "all users", "everyone", "n/a", "none"):
+                if paper_occ:
+                    df_out.at[idx, "user_group"] = paper_occ[0]
+                elif paper_demo:
+                    df_out.at[idx, "user_group"] = paper_demo[0]
+
     def generate_for_node(
         self,
         domain: str,
@@ -2066,40 +2404,14 @@ class CredibleSourceGenerator:
         keywords: str | list[str],
         model: str = "gemini-3.5-flash-lite",
     ) -> dict[str, Any]:
-        """Fetches research paper citations for a single taxonomy node using search grounding.
+        """Fetches a research paper citation for a single taxonomy node (L3 -> L2 -> "Could not find" waterfall).
         Fails fast if the user-selected model encounters an error (no fallback to other models).
         """
         kw_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
-        provider = get_model_provider(model)
-        candidate_papers = (
-            self._search_academic_papers(domain, category, topic, kw_str)
-            if provider != "gemini"
-            else []
+        results = self._ground_with_waterfall(
+            [{"key": "node", "category": category, "topic": topic, "keywords": kw_str}], domain, model, max_workers=1,
         )
-        prompt = self._generate_prompt(domain, category, topic, keywords, candidate_papers=candidate_papers)
-        req = GenerateContentRequest(
-            prompt=prompt,
-            metadata={
-                "domain": domain,
-                "category": category,
-                "topic": topic,
-                "keywords": kw_str,
-                "search_grounding_pairs": candidate_papers,
-            },
-        )
-        tools = self._get_search_tools_for_model(model)
-        result = self._gemini_utils.generate_content(req, model=model, tools=tools, raise_for_status=True)
-        if getattr(result, "error", None):
-            raise GeminiBackendError(result.error, model=model)
-
-        parsed = self._parse_result(
-            result=result,
-            domain=domain,
-            category=category,
-            topic=topic,
-            keywords_str=kw_str,
-        )
-        return parsed
+        return results["node"]
 
     def generate(
         self,
@@ -2109,135 +2421,39 @@ class CredibleSourceGenerator:
         max_workers: int = 5,
         country: Any = None,
     ) -> pd.DataFrame:
-        """Grounds all rows in taxonomy_df with credible research papers using search grounding.
+        """Grounds all rows in taxonomy_df with credible research papers (L3 -> L2 -> "Could not find" waterfall).
 
         The sensitive user groups extracted from each paper (occupation, demographics, country) are stored in the
         extracted_occupations / extracted_Demographics / extracted_Country columns, which ground the synthetic
-        prompts generated afterwards. If no paper is found, the taxonomy-step values are kept. The paper's country is
-        only used when the user selected Global; a specific user country selection always wins.
+        prompts generated afterwards; provenance is recorded in grounding_status / grounding_search_scope.
         Fails fast if the user-selected model encounters an error (no fallback to other models).
         """
         if taxonomy_df.empty:
             return taxonomy_df
 
         df_out = taxonomy_df.copy()
-        for col in ("extracted_occupations", "extracted_Demographics", "extracted_Country", "sensitive_groups_source", "extracted_place"):
-            if col not in df_out.columns:
-                df_out[col] = None
-            df_out[col] = df_out[col].astype(object)
+        for col in ("paper_urls", "paper_titles", "url", "paper_content"):
+            df_out[col] = pd.Series([None] * len(df_out), index=df_out.index, dtype=object)
         selected_countries = normalize_country_selection(country)
-        requests = []
-        row_indices = []
-        provider = get_model_provider(model)
 
+        rows = []
         for idx, row in df_out.iterrows():
-            category = str(row.get("level1", row.get("category", "")))
-            topic = str(row.get("level2", row.get("topic", "")))
             kw = row.get("level3", row.get("keywords", ""))
-            kw_str = ", ".join(kw) if isinstance(kw, list) else str(kw)
+            rows.append({
+                "key": idx,
+                "category": str(row.get("level1", row.get("category", ""))),
+                "topic": str(row.get("level2", row.get("topic", ""))),
+                "keywords": ", ".join(kw) if isinstance(kw, list) else str(kw),
+            })
+        results = self._ground_with_waterfall(rows, domain, model, max_workers)
 
-            candidate_papers = (
-                self._search_academic_papers(domain, category, topic, kw_str)
-                if provider != "gemini"
-                else []
-            )
-            prompt = self._generate_prompt(domain, category, topic, kw_str, candidate_papers=candidate_papers)
-            req = GenerateContentRequest(
-                prompt=prompt,
-                metadata={
-                    "row_index": idx,
-                    "category": category,
-                    "topic": topic,
-                    "keywords": kw_str,
-                    "search_grounding_pairs": candidate_papers,
-                },
-            )
-            requests.append(req)
-            row_indices.append(idx)
-
-        tools = self._get_search_tools_for_model(model)
-        batch_res = self._gemini_utils.generate_content_batch(
-            requests,
-            model=model,
-            tools=tools,
-            max_workers=max_workers,
-            raise_for_status=True,
-        )
-
-        results_by_idx = {res.request.metadata.get("row_index"): res for res in batch_res}
-        results = [results_by_idx.get(req.metadata.get("row_index"), GenerateContentResult(req, "")) for req in requests]
-
-        parsed_by_idx = {}
-        for res in results:
-            meta = res.request.metadata
-            r_idx = meta.get("row_index")
-            parsed = self._parse_result(
-                result=res,
-                domain=domain,
-                category=meta.get("category", ""),
-                topic=meta.get("topic", ""),
-                keywords_str=meta.get("keywords", ""),
-            )
-            parsed_by_idx[r_idx] = parsed
-
-        paper_urls_col = []
-        paper_titles_col = []
-        url_col = []
-        paper_content_col = []
-
-        for idx in row_indices:
-            data = parsed_by_idx.get(idx)
-            if not data:
-                data = {
-                    "paper_urls": [],
-                    "paper_titles": ["Could not find"],
-                    "url": [],
-                    "paper_content": "Could not find",
-                    "extracted_occ": "",
-                    "extracted_demo": "",
-                    "extracted_country": "",
-                }
-            paper_urls_col.append(data["paper_urls"])
-            paper_titles_col.append(data["paper_titles"])
-            url_col.append(data["url"])
-            paper_content_col.append(data["paper_content"])
-
-            # Ground the sensitive user groups in the paper's extracted metadata.
-            paper_occ = [o for o in _as_str_list(re.split(r"[;,]", data.get("extracted_occ") or "")) if o.lower() not in _UNSPECIFIED]
-            paper_demo = [d for d in _as_str_list(re.split(r"[;,]", data.get("extracted_demo") or "")) if d.lower() not in _UNSPECIFIED]
-            # e.g. "Nairobi, Kenya" -> country "Kenya", specific place "Nairobi" (the country is normally last).
-            paper_loc_parts = [x.strip() for x in str(data.get("extracted_country") or "").split(";")[0].split(",") if x.strip()]
-            paper_country = paper_loc_parts[-1] if paper_loc_parts else ""
-            paper_place = ", ".join(paper_loc_parts[:-1])
-            if paper_occ:
-                df_out.at[idx, "extracted_occupations"] = paper_occ
-            if paper_demo:
-                df_out.at[idx, "extracted_Demographics"] = paper_demo
-            paper_country_ok = paper_country and paper_country.lower() not in _UNSPECIFIED | {"global", "all", "worldwide", "multiple"}
-            if paper_country_ok and not selected_countries:
-                df_out.at[idx, "extracted_Country"] = [paper_country]
-                df_out.at[idx, "cleaned_Country"] = paper_country
-            # Keep the paper's specific place (city / region) when it lies in the row's country; prompts prefer it.
-            row_country_now = str(df_out.at[idx, "cleaned_Country"] or "").strip().lower()
-            if paper_place and paper_country_ok and paper_country.lower() == row_country_now:
-                df_out.at[idx, "extracted_place"] = paper_place
-            df_out.at[idx, "sensitive_groups_source"] = "grounding paper" if (paper_occ or paper_demo) else "taxonomy generation"
-
-            if "user_group" in df_out.columns:
-                curr_ug = str(df_out.at[idx, "user_group"] or "").strip()
-                if not curr_ug or curr_ug.lower() in ("general public", "general population", "all users", "everyone", "n/a", "none"):
-                    occ = str(data.get("extracted_occ") or "").strip()
-                    demo = str(data.get("extracted_demo") or "").strip()
-                    if occ and occ.lower() not in ("n/a", "none", "general public", "unspecified"):
-                        df_out.at[idx, "user_group"] = occ
-                    elif demo and demo.lower() not in ("n/a", "none", "general public", "unspecified"):
-                        df_out.at[idx, "user_group"] = demo
-
-        df_out["paper_urls"] = paper_urls_col
-        df_out["paper_titles"] = paper_titles_col
-        df_out["url"] = url_col
-        df_out["paper_content"] = paper_content_col
-
+        for idx in df_out.index:
+            data = results[idx]
+            df_out.at[idx, "paper_urls"] = data["paper_urls"]
+            df_out.at[idx, "paper_titles"] = data["paper_titles"]
+            df_out.at[idx, "url"] = data["url"]
+            df_out.at[idx, "paper_content"] = data["paper_content"]
+            self.apply_grounding_to_row(df_out, idx, data, selected_countries)
         return df_out
 
 
@@ -2285,6 +2501,85 @@ def fetch_citation_for_node(
     )
 
 
+def _l3_matches(l3_val: Any, target_l3: str) -> bool:
+    if isinstance(l3_val, list):
+        return target_l3 in [str(x).strip() for x in l3_val] or ", ".join(str(x).strip() for x in l3_val) == target_l3
+    return str(l3_val) == str(target_l3) or str(target_l3) in str(l3_val)
+
+
+def sync_refetched_node_and_prompts(
+    taxonomy_df: pd.DataFrame,
+    citation_data: dict[str, Any],
+    level1: str,
+    level2: str,
+    level3: str,
+    domain: str,
+    country: Any = None,
+    api_key: str | None = None,
+    api_keys: dict[str, str] | None = None,
+    model: str = "gemini-3.5-flash-lite",
+    modality: list[str] | str | None = None,
+    use_case: str | None = None,
+    language_code: str = "en",
+    cancel_event: Any = None,
+    heartbeat_callback: Any = None,
+    regenerate_prompts: bool = True,
+) -> pd.DataFrame:
+    """Syncs a re-fetched citation into the matching taxonomy row(s) and keeps metadata + prompts consistent.
+
+    Updates paper_urls / paper_titles / url / paper_content, re-applies the grounded sensitive groups and provenance
+    (CredibleSourceGenerator.apply_grounding_to_row), and, when a paper is found, regenerates that branch's 5 synthetic
+    prompts (prompts / prompt_modalities / prompt_personas) from the newly grounded metadata.
+    """
+    if taxonomy_df is None or taxonomy_df.empty:
+        return taxonomy_df
+    df_up = taxonomy_df.copy()
+    for col in ("paper_urls", "paper_titles", "url", "paper_content", "prompts", "prompt_modalities", "prompt_personas"):
+        if col not in df_up.columns:
+            df_up[col] = None
+        if df_up[col].dtype != object:
+            df_up[col] = df_up[col].astype(object)
+
+    mask = [
+        _l3_matches(r.get("level3", ""), level3) and str(r.get("level1", "")) == str(level1) and str(r.get("level2", "")) == str(level2)
+        for _, r in df_up.iterrows()
+    ]
+    match_idx = [idx for idx, m in zip(df_up.index, mask) if m]
+    if not match_idx:
+        return df_up
+
+    selected_countries = normalize_country_selection(country)
+    for idx in match_idx:
+        df_up.at[idx, "paper_urls"] = list(citation_data.get("paper_urls") or [])
+        df_up.at[idx, "paper_titles"] = list(citation_data.get("paper_titles") or ["Could not find"])
+        df_up.at[idx, "url"] = list(citation_data.get("url") or [])
+        df_up.at[idx, "paper_content"] = citation_data.get("paper_content", "Could not find")
+        CredibleSourceGenerator.apply_grounding_to_row(df_up, idx, citation_data, selected_countries)
+
+    paper_found = citation_data.get("paper_titles") not in (None, [], ["Could not find"])
+    # Only taxonomy branch rows (holding the per-branch prompt lists) are regenerated; "+10 More" rows are left as-is.
+    branch_idx = [idx for idx in match_idx if isinstance(df_up.at[idx, "prompts"], list) or "prompt_modalities" in df_up.columns and isinstance(df_up.at[idx, "prompt_modalities"], list)]
+    if regenerate_prompts and paper_found and branch_idx:
+        client = MultiModelUtils(api_key=api_key, api_keys=api_keys, cancel_event=cancel_event, heartbeat_callback=heartbeat_callback)
+        regenerated = PromptsGenerator(client).generate_for_taxonomy(
+            taxonomy_df=df_up.loc[branch_idx],
+            domain=domain,
+            country=country,
+            num_prompts=5,
+            model=model,
+            modality=modality,
+            use_case=use_case,
+            language_code=language_code,
+        )
+        for idx in branch_idx:
+            for col in ("prompts", "prompt_modalities", "prompt_personas"):
+                df_up.at[idx, col] = regenerated.at[idx, col]
+            mods = regenerated.at[idx, "prompt_modalities"]
+            if "model_modality" in df_up.columns and isinstance(mods, list) and mods:
+                df_up.at[idx, "model_modality"] = mods[0]
+    return df_up
+
+
 def generate_dynamic_prompts(
     taxonomy_df: pd.DataFrame,
     domain: str,
@@ -2299,6 +2594,7 @@ def generate_dynamic_prompts(
     cancel_event: Any = None,
     heartbeat_callback: Any = None,
     use_case: str | None = None,
+    language_code: str = "en",
 ) -> pd.DataFrame:
     """Synthesizes dynamic prompts for a given taxonomy DataFrame."""
     if progress_callback:
@@ -2316,6 +2612,7 @@ def generate_dynamic_prompts(
         model=model,
         modality=modality,
         use_case=use_case,
+        language_code=language_code,
     )
     if progress_callback:
         progress_callback(1.0, f"Generated {len(res_df)} synthetic evaluation prompts!")
@@ -2397,6 +2694,7 @@ def generate_dynamic_taxonomy(
         model=model,
         modality=modality_list,
         use_case=use_case,
+        language_code=language_code,
     )
 
     # Format standard attributes. Each prompt carries its own target modality in "prompt_modalities";

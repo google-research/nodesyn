@@ -66,6 +66,7 @@ if not IS_STATIC_HOSTING:
         generate_dynamic_autoratings,
         generate_credible_sources,
         fetch_citation_for_node,
+        sync_refetched_node_and_prompts,
         get_configured_api_keys,
         get_available_providers,
         get_model_provider,
@@ -88,6 +89,7 @@ else:
     generate_dynamic_taxonomy = generate_dynamic_prompts = _dynamic_unavailable
     generate_dynamic_evaluations = generate_dynamic_autoratings = _dynamic_unavailable
     generate_credible_sources = fetch_citation_for_node = _dynamic_unavailable
+    sync_refetched_node_and_prompts = _dynamic_unavailable
 
     def parse_backend_error(error, model=None, provider=None) -> dict[str, Any]:
         return {"category": "UNSUPPORTED_MODE", "headline": "Not supported", "gist": str(error),
@@ -1086,6 +1088,12 @@ sync_bg_eval_state()
 
 
 def set_step(new_step):
+    # Snapshot the Autorater widgets before switching tabs (a sidebar click can happen before the Autorater tab body
+    # reruns), so edits are not lost when Streamlit garbage-collects the unmounted widgets.
+    if "dynamic_rubric_input" in st.session_state:
+        st.session_state["saved_dynamic_rubric"] = st.session_state["dynamic_rubric_input"]
+    if "dynamic_autorater_judge_select" in st.session_state:
+        st.session_state["saved_autorater_judge_model"] = st.session_state["dynamic_autorater_judge_select"]
     st.session_state.step = new_step
 
 # Sidebar Nav
@@ -1557,7 +1565,7 @@ elif st.session_state.step == "Concept":
                 st.session_state.saved_concept = st.session_state.target_concept
                 st.session_state.saved_countries = st.session_state.target_countries
                 st.session_state.saved_modality = list(st.session_state.get('modality', ["text-to-image", "text-to-video", "text-to-text"]))
-                for k in ("eval_filtered_data", "eval_filtered_modalities", "saved_data_filter_l1", "saved_data_filter_l2", "saved_data_filter_l3", "saved_data_filter_mod", "saved_selected_row_indices"):
+                for k in ("eval_filtered_data", "eval_filtered_modalities", "saved_data_filter_l1", "saved_data_filter_l2", "saved_data_filter_l3", "saved_data_filter_mod", "saved_data_filter_grounding", "saved_selected_row_indices", "saved_dynamic_rubric", "dynamic_rubric_input", "saved_autorater_judge_model", "dynamic_autorater_judge_select", "autorater_data", "annotation_started"):
                     st.session_state.pop(k, None)
                 with st.spinner("Generating Taxonomy (Simulated)..."):
                     time.sleep(1)
@@ -1598,9 +1606,11 @@ elif st.session_state.step == "Concept":
                     st.session_state.saved_countries = st.session_state.target_countries
                     st.session_state.saved_definition = dom_def
                     st.session_state.saved_modality = modal_val
+                    st.session_state.saved_language_code = lang_code
+                    st.session_state.saved_use_case = u_case
                     st.session_state.active_tax_model = selected_tax_model
-                    st.session_state.pop("eval_filtered_data", None)
-                    st.session_state.pop("eval_filtered_modalities", None)
+                    for k in ("eval_filtered_data", "eval_filtered_modalities", "saved_data_filter_l1", "saved_data_filter_l2", "saved_data_filter_l3", "saved_data_filter_mod", "saved_data_filter_grounding", "saved_selected_row_indices", "saved_dynamic_rubric", "dynamic_rubric_input", "saved_autorater_judge_model", "dynamic_autorater_judge_select", "autorater_data", "annotation_started"):
+                        st.session_state.pop(k, None)
 
                     col_prog, col_stop = st.columns([4, 1.2])
                     with col_prog:
@@ -1867,6 +1877,22 @@ elif st.session_state.step == "Taxonomy":
                              st.markdown(f"<span style='background:#fdf2f8; color:#db2777; padding:4px 12px; border-radius:16px; font-size:0.85em; display:inline-block;'>{demo_val}</span>", unsafe_allow_html=True)
 
                          st.markdown("<br>", unsafe_allow_html=True)
+
+                         # Occupations (dynamic mode: grounded / inferred sensitive occupations)
+                         if st.session_state.get('data_mode') == 'dynamic':
+                             st.markdown("💼 **OCCUPATIONS**")
+                             occ_val = node_data.get('extracted_occupations', [])
+                             if isinstance(occ_val, str) and occ_val.startswith('['):
+                                 try: occ_val = ast.literal_eval(occ_val)
+                                 except Exception: pass
+                             occ_list = occ_val if isinstance(occ_val, list) else ([occ_val] if str(occ_val or '').strip() and str(occ_val) != 'nan' else [])
+                             unique_occs = list(dict.fromkeys(str(o).strip() for o in occ_list if str(o).strip()))
+                             if unique_occs:
+                                 pills = "".join([f"<span style='background:#ecfdf5; color:#047857; padding:4px 12px; border-radius:16px; font-size:0.85em; margin-right:8px; display:inline-block; margin-bottom:8px;'>{o}</span>" for o in unique_occs])
+                                 st.markdown(pills, unsafe_allow_html=True)
+                             else:
+                                 st.markdown("<span style='color:#94a3b8; font-size:0.85em;'>N/A</span>", unsafe_allow_html=True)
+                             st.markdown("<br>", unsafe_allow_html=True)
                          
                          # Use Cases
                          st.markdown("📋 **USE CASES**")
@@ -1884,9 +1910,23 @@ elif st.session_state.step == "Taxonomy":
                          
                          # Research Citations
                          st.markdown("📖 **RESEARCH CITATIONS**")
-                         st.caption(
-                             "⚠️ **Disclosure:** Research citations use Google Search and may contain invalid research paper links."
-                         )
+                         if st.session_state.get('data_mode') == 'dynamic':
+                             st.caption(
+                                 "⚠️ **Disclosure:** Research citations use Web / Academic Search Grounding and may contain invalid research paper links."
+                             )
+                             g_status = str(node_data.get('grounding_status') or '').strip()
+                             if not g_status or g_status == 'nan':
+                                 _pu = node_data.get('paper_urls')
+                                 g_status = "Paper-Grounded" if isinstance(_pu, list) and len(_pu) > 0 else "Model-Inferred"
+                             if g_status == "Paper-Grounded":
+                                 scope_suffix = " · L2 Subtopic Match" if str(node_data.get('grounding_search_scope') or '') == "broad_l2_fallback" else ""
+                                 st.markdown(f"<span style='background:#ecfdf5; color:#047857; border:1px solid #a7f3d0; padding:3px 10px; border-radius:9999px; font-size:0.8em; font-weight:600;'>📄 Paper-Grounded{scope_suffix}</span>", unsafe_allow_html=True)
+                             else:
+                                 st.markdown("<span style='background:#fffbeb; color:#b45309; border:1px solid #fde68a; padding:3px 10px; border-radius:9999px; font-size:0.8em; font-weight:600;'>⚠️ Model-Inferred (No Direct Paper Found)</span>", unsafe_allow_html=True)
+                         else:
+                             st.caption(
+                                 "⚠️ **Disclosure:** Research citations use Google Search and may contain invalid research paper links."
+                             )
                          
                          import re
                          import ast
@@ -1988,29 +2028,25 @@ elif st.session_state.step == "Taxonomy":
                                              heartbeat_callback=lambda: heartbeat_cite_auto.empty(),
                                          )
                                          if 'demo_data' in st.session_state and not st.session_state.demo_data.empty:
-                                             df_up = st.session_state.demo_data.copy()
-                                             for r_i, r_val in df_up.iterrows():
-                                                 l3_val = r_val.get('level3', '')
-                                                 match_found = False
-                                                 if isinstance(l3_val, list) and curr_l3 in l3_val:
-                                                      match_found = True
-                                                 elif str(l3_val) == str(curr_l3) or curr_l3 in str(l3_val):
-                                                      match_found = True
-                                                 if match_found and str(r_val.get('level1', '')) == str(curr_l1) and str(r_val.get('level2', '')) == str(curr_l2):
-                                                      df_up.at[r_i, 'paper_urls'] = res_ground['paper_urls']
-                                                      df_up.at[r_i, 'paper_titles'] = [clean_citation_title(t) for t in res_ground.get('paper_titles', [])]
-                                                      df_up.at[r_i, 'url'] = res_ground['url']
-                                                      df_up.at[r_i, 'paper_content'] = res_ground['paper_content']
-                                                      if 'user_group' in df_up.columns:
-                                                          curr_ug = str(df_up.at[r_i, 'user_group'] or '').strip()
-                                                          if not curr_ug or curr_ug.lower() in ('general public', 'general population', 'all users', 'everyone', 'n/a', 'none'):
-                                                              occ = str(res_ground.get('extracted_occ') or '').strip()
-                                                              demo = str(res_ground.get('extracted_demo') or '').strip()
-                                                              if occ and occ.lower() not in ('n/a', 'none', 'general public', 'unspecified'):
-                                                                  df_up.at[r_i, 'user_group'] = occ
-                                                              elif demo and demo.lower() not in ('n/a', 'none', 'general public', 'unspecified'):
-                                                                  df_up.at[r_i, 'user_group'] = demo
-                                             st.session_state.demo_data = df_up
+                                             res_ground = dict(res_ground)
+                                             res_ground['paper_titles'] = [clean_citation_title(t) for t in res_ground.get('paper_titles', [])] or ['Could not find']
+                                             # Sync citation + grounded metadata into the matching rows and regenerate that branch's prompts.
+                                             st.session_state.demo_data = sync_refetched_node_and_prompts(
+                                                 taxonomy_df=st.session_state.demo_data,
+                                                 citation_data=res_ground,
+                                                 level1=curr_l1,
+                                                 level2=curr_l2,
+                                                 level3=curr_l3,
+                                                 domain=curr_domain,
+                                                 country=st.session_state.get('saved_countries', ['Global']),
+                                                 api_key=current_keys.get('gemini'),
+                                                 api_keys=current_keys,
+                                                 model=grounding_model,
+                                                 modality=st.session_state.get('saved_modality'),
+                                                 use_case=st.session_state.get('saved_use_case', st.session_state.get('use_case', 'Advice seeking')),
+                                                 language_code=st.session_state.get('saved_language_code', st.session_state.get('language_code', 'en')),
+                                                 cancel_event=cancel_cite_ev,
+                                             )
                                              st.rerun()
                                      except GenerationCancelledError:
                                          st.session_state["stop_notice_citation"] = "⏹️ Citation search grounding was stopped by user."
@@ -2039,7 +2075,7 @@ elif st.session_state.step == "Taxonomy":
                              st.markdown(f"- 📄 *{not_found_title}*")
                              scholar_q = urllib.parse.quote_plus(f"{curr_domain} {curr_l2} {curr_l3} research paper")
                              st.markdown(f"<div style='margin-top: 4px; margin-bottom: 8px;'><a href='https://scholar.google.com/scholar?q={scholar_q}' target='_blank' style='font-size: 0.82em; color: #4f46e5; text-decoration: none;'>🔍 Search related research on Google Scholar ↗</a></div>", unsafe_allow_html=True)
-                             if st.button("🔄 Fetch Citation via Google Search Grounding", key=f"btn_refetch_cite_{curr_l1}_{curr_l2}_{curr_l3}", use_container_width=False):
+                             if st.button("🔄 Fetch Citation via Web / Academic Search Grounding", key=f"btn_refetch_cite_{curr_l1}_{curr_l2}_{curr_l3}", use_container_width=False):
                                  current_keys = get_app_api_keys()
                                  active_tax = st.session_state.get("active_tax_model", "")
                                  grounding_model = active_tax
@@ -2051,7 +2087,7 @@ elif st.session_state.step == "Taxonomy":
                                  )
                                  heartbeat_cite_manual = st.empty()
                                  cancel_cite_ev = create_task_cancel_event("citation")
-                                 with st.spinner(f"Fetching research citation using {grounding_model} with Google Search..."):
+                                 with st.spinner(f"Fetching research citation using {grounding_model} with Web / Academic Search Grounding..."):
                                      try:
                                          st.session_state.pop("last_node_citation_error", None)
                                          res_ground = fetch_citation_for_node(
@@ -2066,29 +2102,25 @@ elif st.session_state.step == "Taxonomy":
                                              heartbeat_callback=lambda: heartbeat_cite_manual.empty(),
                                          )
                                          if 'demo_data' in st.session_state and not st.session_state.demo_data.empty:
-                                             df_up = st.session_state.demo_data.copy()
-                                             for r_i, r_val in df_up.iterrows():
-                                                 l3_val = r_val.get('level3', '')
-                                                 match_found = False
-                                                 if isinstance(l3_val, list) and curr_l3 in l3_val:
-                                                     match_found = True
-                                                 elif str(l3_val) == str(curr_l3) or curr_l3 in str(l3_val):
-                                                     match_found = True
-                                                 if match_found and str(r_val.get('level1', '')) == str(curr_l1) and str(r_val.get('level2', '')) == str(curr_l2):
-                                                     df_up.at[r_i, 'paper_urls'] = res_ground['paper_urls']
-                                                     df_up.at[r_i, 'paper_titles'] = [clean_citation_title(t) for t in res_ground.get('paper_titles', [])]
-                                                     df_up.at[r_i, 'url'] = res_ground['url']
-                                                     df_up.at[r_i, 'paper_content'] = res_ground['paper_content']
-                                                     if 'user_group' in df_up.columns:
-                                                         curr_ug = str(df_up.at[r_i, 'user_group'] or '').strip()
-                                                         if not curr_ug or curr_ug.lower() in ('general public', 'general population', 'all users', 'everyone', 'n/a', 'none'):
-                                                             occ = str(res_ground.get('extracted_occ') or '').strip()
-                                                             demo = str(res_ground.get('extracted_demo') or '').strip()
-                                                             if occ and occ.lower() not in ('n/a', 'none', 'general public', 'unspecified'):
-                                                                 df_up.at[r_i, 'user_group'] = occ
-                                                             elif demo and demo.lower() not in ('n/a', 'none', 'general public', 'unspecified'):
-                                                                 df_up.at[r_i, 'user_group'] = demo
-                                             st.session_state.demo_data = df_up
+                                             res_ground = dict(res_ground)
+                                             res_ground['paper_titles'] = [clean_citation_title(t) for t in res_ground.get('paper_titles', [])] or ['Could not find']
+                                             # Sync citation + grounded metadata into the matching rows and regenerate that branch's prompts.
+                                             st.session_state.demo_data = sync_refetched_node_and_prompts(
+                                                 taxonomy_df=st.session_state.demo_data,
+                                                 citation_data=res_ground,
+                                                 level1=curr_l1,
+                                                 level2=curr_l2,
+                                                 level3=curr_l3,
+                                                 domain=curr_domain,
+                                                 country=st.session_state.get('saved_countries', ['Global']),
+                                                 api_key=current_keys.get('gemini'),
+                                                 api_keys=current_keys,
+                                                 model=grounding_model,
+                                                 modality=st.session_state.get('saved_modality'),
+                                                 use_case=st.session_state.get('saved_use_case', st.session_state.get('use_case', 'Advice seeking')),
+                                                 language_code=st.session_state.get('saved_language_code', st.session_state.get('language_code', 'en')),
+                                                 cancel_event=cancel_cite_ev,
+                                             )
                                              st.rerun()
                                      except GenerationCancelledError:
                                          st.session_state["stop_notice_citation"] = "⏹️ Citation search grounding was stopped by user."
@@ -2194,6 +2226,15 @@ elif st.session_state.step == "Data":
 
         df_work['_prompt_modality'] = [_per_prompt_values(i, 'prompt_modalities', 'prompt_modality') for i in df_work.index]
         df_work['_prompt_persona'] = [_per_prompt_values(i, 'prompt_personas', 'prompt_persona') for i in df_work.index]
+        if is_dynamic:
+            # Grounding provenance per row: Paper-Grounded vs Model-Inferred.
+            def _grounding_for(row_idx):
+                gs = df.at[row_idx, 'grounding_status'] if 'grounding_status' in df.columns else None
+                if isinstance(gs, str) and gs.strip() and gs != 'nan':
+                    return gs
+                pu = df.at[row_idx, 'paper_urls'] if 'paper_urls' in df.columns else None
+                return "Paper-Grounded" if isinstance(pu, list) and len(pu) > 0 else "Model-Inferred"
+            df_work['grounding_status'] = [_grounding_for(i) for i in df_work.index]
 
         # Explode prompts if they are lists (together with their per-prompt modality and persona)
         if df_work['prompts'].apply(lambda x: isinstance(x, list)).any():
@@ -2454,6 +2495,8 @@ elif st.session_state.step == "Data":
         if is_dynamic and 'persona' in df_work.columns:
             inspector_cols += ['user_group', 'persona']
         inspector_cols += ['prompts', 'complexity', 'extracted_Country', 'Domain']
+        if is_dynamic and 'grounding_status' in df_work.columns:
+            inspector_cols += ['grounding_status']
         gt_df = df_work[inspector_cols].copy()
 
         # Rename columns for spreadsheet appearance
@@ -2467,13 +2510,18 @@ elif st.session_state.step == "Data":
             'prompts': 'Synthetic Prompt',
             'complexity': 'Complexity Score',
             'extracted_Country': 'Country',
-            'Domain': 'Domain'
+            'Domain': 'Domain',
+            'grounding_status': 'Grounding',
         })
 
         # --- Table Filters ---
         st.markdown('<div style="margin-top: 1rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;"><span style="color: #6366f1; font-size: 14px;">🔍</span><span style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Table Filters</span></div>', unsafe_allow_html=True)
         
-        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+        has_grounding_filter = 'Grounding' in display_df.columns
+        if has_grounding_filter:
+            col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
+        else:
+            col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
             l1_options = sorted(display_df['L1 Category'].dropna().unique().tolist())
             if "data_filter_l1" not in st.session_state and st.session_state.get("saved_data_filter_l1"):
@@ -2498,6 +2546,14 @@ elif st.session_state.step == "Data":
                 st.session_state["data_filter_mod"] = [x for x in st.session_state["saved_data_filter_mod"] if x in mod_options]
             selected_mod = st.multiselect("Modality", options=mod_options, placeholder="All Modalities", key="data_filter_mod")
             st.session_state["saved_data_filter_mod"] = list(selected_mod)
+        selected_grounding = []
+        if has_grounding_filter:
+            with col_f5:
+                grounding_options = sorted(display_df['Grounding'].dropna().unique().tolist())
+                if "data_filter_grounding" not in st.session_state and st.session_state.get("saved_data_filter_grounding"):
+                    st.session_state["data_filter_grounding"] = [x for x in st.session_state["saved_data_filter_grounding"] if x in grounding_options]
+                selected_grounding = st.multiselect("Grounding", options=grounding_options, placeholder="All Grounding Types", key="data_filter_grounding")
+                st.session_state["saved_data_filter_grounding"] = list(selected_grounding)
 
         # Apply filters to both display_df and underlying df_work
         filtered_mask = pd.Series(True, index=display_df.index)
@@ -2509,6 +2565,8 @@ elif st.session_state.step == "Data":
             filtered_mask &= display_df['L3 Leaf'].isin(selected_l3)
         if selected_mod:
             filtered_mask &= display_df['Modality'].isin(selected_mod)
+        if selected_grounding:
+            filtered_mask &= display_df['Grounding'].isin(selected_grounding)
 
         filtered_work_df = df_work.loc[filtered_mask].reset_index(drop=True)
         display_df = display_df.loc[filtered_mask].reset_index(drop=True)
@@ -2555,6 +2613,7 @@ elif st.session_state.step == "Data":
                 "Modality": st.column_config.TextColumn("Modality", width="small"),
                 "User Group": st.column_config.TextColumn("User Group", width="small"),
                 "Persona": st.column_config.TextColumn("Persona", width="medium"),
+                "Grounding": st.column_config.TextColumn("Grounding", width="small"),
                 "Synthetic Prompt": st.column_config.TextColumn("Synthetic Prompt", width="large"),
                 "Complexity Score": st.column_config.NumberColumn("Complexity Score", format="%.1f/10"),
             }
@@ -2637,6 +2696,8 @@ elif st.session_state.step == "Data":
                             api_keys=current_keys,
                             model=prompt_model,
                             modality=user_modalities,
+                            language_code=st.session_state.get("saved_language_code", st.session_state.get("language_code", "en")),
+                            use_case=st.session_state.get("saved_use_case", st.session_state.get("use_case", "Advice seeking")),
                             cancel_event=cancel_prompts_ev,
                             heartbeat_callback=lambda: heartbeat_prompts_slot.empty(),
                         )
@@ -3658,7 +3719,18 @@ Violation - Safety Issue
 <h3 style="margin: 0; color: #0f172a; font-size: 1.25rem; font-weight: 800;">Rubric Configuration</h3>
 </div>
 """, unsafe_allow_html=True)
-                rubric_input = st.text_area("Annotation Rubric", value=default_rubric_template, height=380, key="dynamic_rubric_input")
+                # Persist the rubric across tab navigation via a non-widget saved_* key (widget state is dropped when unmounted).
+                if "dynamic_rubric_input" not in st.session_state:
+                    st.session_state["dynamic_rubric_input"] = st.session_state.get("saved_dynamic_rubric", default_rubric_template)
+                rubric_input = st.text_area(
+                    "Annotation Rubric",
+                    height=380,
+                    key="dynamic_rubric_input",
+                    on_change=lambda: st.session_state.__setitem__(
+                        "saved_dynamic_rubric", st.session_state.get("dynamic_rubric_input", default_rubric_template)
+                    ),
+                )
+                st.session_state["saved_dynamic_rubric"] = rubric_input
 
                 st.markdown("""<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; margin-bottom: 0.5rem;">
 <span style="font-size: 1.1rem;">🤖</span>
@@ -3666,7 +3738,19 @@ Violation - Safety Issue
 </div>""", unsafe_allow_html=True)
                 
                 AUTORATER_MODELS = get_autorater_judge_options()
-                selected_model_display = st.selectbox("Autorater Judge Model", list(AUTORATER_MODELS.keys()), label_visibility="collapsed")
+                autorater_model_options = list(AUTORATER_MODELS.keys())
+                if "dynamic_autorater_judge_select" not in st.session_state and st.session_state.get("saved_autorater_judge_model") in autorater_model_options:
+                    st.session_state["dynamic_autorater_judge_select"] = st.session_state["saved_autorater_judge_model"]
+                selected_model_display = st.selectbox(
+                    "Autorater Judge Model",
+                    autorater_model_options,
+                    label_visibility="collapsed",
+                    key="dynamic_autorater_judge_select",
+                    on_change=lambda: st.session_state.__setitem__(
+                        "saved_autorater_judge_model", st.session_state.get("dynamic_autorater_judge_select")
+                    ),
+                )
+                st.session_state["saved_autorater_judge_model"] = selected_model_display
                 selected_judge_model = AUTORATER_MODELS[selected_model_display]
 
                 n_eval_rows = len(eval_data_source)
@@ -4285,7 +4369,7 @@ elif st.session_state.step == "Analysis":
     }
     rubric_defined_labels: list[str] = []
     if is_dynamic:
-        raw_rubric_txt = st.session_state.get("dynamic_rubric_input", "")
+        raw_rubric_txt = st.session_state.get("saved_dynamic_rubric") or st.session_state.get("dynamic_rubric_input", "")
         rubric_defined_labels = extract_rubric_labels_from_text(raw_rubric_txt)
         if not rubric_defined_labels:
             rubric_defined_labels = fallback_rubric_map.get(
