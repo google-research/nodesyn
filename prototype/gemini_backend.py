@@ -1214,6 +1214,30 @@ def ensure_country_in_prompt(text: str, modality: str, country: str, place: str 
     return f"{text} (I live in {where}.)"
 
 
+_ENGLISH_FUNCTION_WORDS = {
+    "the", "a", "an", "of", "to", "in", "and", "or", "is", "are", "am", "was", "my", "i", "i'm", "me", "you", "your",
+    "for", "with", "what", "how", "should", "can", "do", "does", "on", "at", "who", "that", "this", "it", "be", "have",
+    "has", "from", "about", "their", "her", "his", "she", "he", "they", "we", "our", "while", "her", "showing", "into",
+}
+
+
+def looks_english(text: str) -> bool:
+    """Heuristic check that a prompt is written in English (not, e.g., Spanish set in Spain).
+
+    Counts common English function words; proper nouns (local place / person names) do not affect the result.
+    Very short texts are accepted.
+    """
+    raw = str(text or "")
+    letters = [ch for ch in raw if ch.isalpha()]
+    if letters and sum(1 for ch in letters if ord(ch) > 0x024F) / len(letters) > 0.3:
+        return False  # mostly non-Latin script (e.g. Hindi, Japanese, Arabic)
+    words = re.findall(r"[a-zA-Z\u00C0-\u024F']+", raw.lower())
+    if len(words) < 6:
+        return True
+    hits = sum(1 for w in words if w in _ENGLISH_FUNCTION_WORDS)
+    return hits / len(words) >= 0.12
+
+
 def fallback_persona_prompt(modality: str, persona: str, topic: str, keywords: str, country: str) -> str:
     """Deterministic persona- and modality-aware prompt used only if the model returns nothing usable."""
     where = f" in {country}" if country and country.lower() not in {"global", "all", ""} else ""
@@ -1497,19 +1521,25 @@ class PromptsGenerator:
         country_str = country if country else "one single country of your choice (the same country for every prompt)"
         modality_str = ", ".join(dict.fromkeys(slot_modalities))
         n = len(slot_modalities)
-        target_language_line = "" if is_english else f"\n        • Target Language: {lang_label} ({code})"
-        culture_clause = (
-            "Use only names, places, institutions, languages, and cultural details from"
-            if is_english
-            else "Use only names, places, institutions, and cultural details from"
-        )
-        language_requirement = "" if is_english else (
-            f"\n        CRITICAL LANGUAGE REQUIREMENT: write every \"prompt\" value 100% naturally and idiomatically in {lang_label} ({code}), "
-            "including the image-generation and video-generation instruction phrasing (never start with English phrases such as "
-            "\"Create an image of\", \"Show\", or \"Generate a video of\"), and translate the keyterms naturally without English glosses. "
-            "Keep the JSON fields \"modality\", \"group\", and \"country\" in English, and set \"place\" to the exact city / town / region "
-            "substring exactly as it is written inside \"prompt\"."
-        )
+        # The output language is set ONLY by the Concept tab's language code, never by the country (e.g. Spain + "en"
+        # must give English prompts), so it is always stated explicitly, English included.
+        target_language_line = f"\n        • Target Language: {lang_label} ({code})"
+        culture_clause = "Use only names, places, institutions, and cultural details from"
+        if is_english:
+            language_requirement = (
+                f"\n        CRITICAL LANGUAGE REQUIREMENT: write every \"prompt\" value entirely in English ({code}), even though it is set in "
+                f"{country_str}. Do NOT write in the local language of the country; only proper nouns (names of people, places, "
+                "institutions) may stay in their local form. Keep all JSON fields in English, and set \"place\" to the exact city / town / "
+                "region substring exactly as it is written inside \"prompt\"."
+            )
+        else:
+            language_requirement = (
+                f"\n        CRITICAL LANGUAGE REQUIREMENT: write every \"prompt\" value 100% naturally and idiomatically in {lang_label} ({code}), "
+                "regardless of the country, including the image-generation and video-generation instruction phrasing (never start with "
+                "English phrases such as \"Create an image of\", \"Show\", or \"Generate a video of\"), and translate the keyterms naturally "
+                "without English glosses. Keep the JSON fields \"modality\", \"group\", and \"country\" in English, and set \"place\" to "
+                "the exact city / town / region substring exactly as it is written inside \"prompt\"."
+            )
         return textwrap.dedent(f"""\
         As a model evaluation researcher specializing in prompt generation from diverse user perspectives, generate specific prompts.
         • Domain: {domain}
@@ -1522,10 +1552,11 @@ class PromptsGenerator:
         • Use Case: {use_case}
         • LLM Evaluation Modality: {modality_str}{target_language_line}
         Your task is to generate diverse prompts that reflect the unique concerns and language of each identified sensitive group for the given use case and evaluation modality. Do not provide rationale, we just want clean prompts.
+        ("Language" here means each group's own vocabulary, phrasing, and tone; the natural language of every prompt is the Target Language above.)
 
         Generate exactly {n} prompts, one per slot below. Each slot has a required modality; write the prompt in the form that modality expects:
 {format_prompt_slots(slot_modalities)}
-        Each prompt must speak from, or depict, a member of the sensitive user groups above (an occupation and/or demographic), using their concerns and language. Use a different sensitive group for each prompt.
+        Each prompt must speak from, or depict, a member of the sensitive user groups above (an occupation and/or demographic), using their concerns, vocabulary, and tone. Use a different sensitive group for each prompt.
         Every prompt must be set in a specific, real city, town, or region within {country_str}{f" (prefer {place})" if place else ""} and must name that place explicitly; prefer a specific place over the broad country label (naming the place is enough). {culture_clause} {country_str}. Never set a prompt in any other country.{language_requirement}
         Output ONLY a JSON array of {n} objects, one per slot in order: [{{"modality": "<slot modality>", "group": "<the occupation / demographic the prompt represents>", "place": "<the city / town / region named in the prompt>", "country": "<the country that place is in>", "prompt": "<the prompt text>"}}]
         """)
@@ -1671,6 +1702,8 @@ class PromptsGenerator:
         def _needs_revision(o: dict[str, Any], i: int) -> bool:
             if not is_en and i in o.get("fallback_slots", set()):
                 return True  # English fallback text must be rewritten in the target language
+            if is_en and not looks_english(o["texts"][i]):
+                return True  # e.g. Spanish prompt for a Spain row when the target language is English
             return bool(o["country"]) and not _ok(o, i)
 
         def _ok(o: dict[str, Any], i: int) -> bool:
@@ -1691,11 +1724,11 @@ class PromptsGenerator:
                 f'set in a specific, real city, town, or region within {o["country"]}{prefer} and names that place explicitly'
                 if o["country"] else "set in a specific, real place and names that place explicitly"
             )
-            language_req = "" if is_en else f", written 100% naturally in {lang_label} ({code})"
+            language_req = f", written entirely in English ({code}) (only proper nouns may stay local)" if is_en else f", written 100% naturally in {lang_label} ({code})"
             retry_prompt = (
                 o["base_prompt"]
                 + "\n\nREVISION REQUIRED: the prompts below are not located anywhere specific"
-                + ("" if is_en else f" or are not written in {lang_label}")
+                + f" or are not written in {lang_label}"
                 + f". Rewrite EACH one so that it is {location_req}{language_req}, keeping the "
                 + "same modality, sensitive group, and intent. "
                 + f"Output ONLY a JSON array of {len(bad)} objects in the same order, each with \"modality\", \"group\", \"place\", \"country\", \"prompt\".\n"
@@ -1731,6 +1764,8 @@ class PromptsGenerator:
                     new_country = str(item.get("country", "") if isinstance(item, dict) else "").strip()
                     if new_country and not same_country(new_country, o["country"]):
                         continue  # place reported in a different country: reject
+                    if is_en and not looks_english(new_text):
+                        continue
                     if new_text and is_location_grounded(new_text, o["country"], [new_place, o["row_place"]]):
                         o["texts"][slot] = new_text
                         o.get("fallback_slots", set()).discard(slot)
