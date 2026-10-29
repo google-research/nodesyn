@@ -824,7 +824,7 @@ def create_sankey_visualization(df_final):
         'user_group':      {'solid': '#059669', 'light': 'rgba(5,150,105,0.25)'},    # Deep Emerald
     }
     _LEVEL_LABELS = {
-        'Domain': 'Domain', 'level1': 'L1', 'level2': 'L2',
+        'Domain': 'Target Topic', 'level1': 'L1', 'level2': 'L2',
         'level3': 'L3', 'cleaned_Country': 'Country', 'user_group': 'User Group'
     }
     _LEVEL_ORDER = ['Domain', 'level1', 'level2', 'level3', 'cleaned_Country', 'user_group']
@@ -1060,6 +1060,15 @@ def sync_bg_eval_state():
         bg_store["status"] = "idle"
 
 
+# Presets for domain definitions
+CONCEPT_DEFINITIONS = {
+    "Custom Domain": "",
+    "Medical Advice": "Patient specific health assessment focusing on nuanced guidance and symptom interpretation.",
+    "Example: Medical Advice": "Patient specific health assessment focusing on nuanced guidance and symptom interpretation.",
+    "Public Health and Safety": "Policies, healthcare access, sanitation standards, disease outbreak response, and public health community measures.",
+    "Example: Public Health and Safety": "Policies, healthcare access, sanitation standards, disease outbreak response, and public health community measures.",
+}
+
 # Application State
 if 'step' not in st.session_state:
     st.session_state.step = "Home"
@@ -1070,8 +1079,32 @@ if 'data_mode' not in st.session_state:
 if 'highest_step' not in st.session_state:
     st.session_state.highest_step = 0
 
+if 'saved_concept' not in st.session_state:
+    st.session_state.saved_concept = "Medical Advice"
+
+if 'saved_concept_selector' not in st.session_state:
+    st.session_state.saved_concept_selector = "Custom Domain"
+
+if 'saved_custom_domain' not in st.session_state:
+    st.session_state.saved_custom_domain = ""
+
+if 'saved_countries' not in st.session_state:
+    st.session_state.saved_countries = ["Global"]
+
+if 'saved_language_code' not in st.session_state:
+    st.session_state.saved_language_code = "en"
+
+if 'saved_use_case' not in st.session_state:
+    st.session_state.saved_use_case = "Advice seeking"
+
+if 'saved_definition' not in st.session_state:
+    st.session_state.saved_definition = CONCEPT_DEFINITIONS["Custom Domain"]
+
 if 'saved_modality' not in st.session_state:
     st.session_state.saved_modality = ["text-to-image", "text-to-video", "text-to-text"]
+
+if 'saved_tax_model_label' not in st.session_state:
+    st.session_state.saved_tax_model_label = None
 
 if 'modality' not in st.session_state:
     st.session_state.modality = list(st.session_state.saved_modality)
@@ -1088,6 +1121,23 @@ sync_bg_eval_state()
 
 
 def set_step(new_step):
+    if st.session_state.get("step") == "Concept":
+        if "concept_selector" in st.session_state:
+            st.session_state["saved_concept_selector"] = st.session_state["concept_selector"]
+        if "custom_domain" in st.session_state:
+            st.session_state["saved_custom_domain"] = st.session_state["custom_domain"]
+        if "target_countries" in st.session_state and st.session_state["target_countries"]:
+            st.session_state["saved_countries"] = list(st.session_state["target_countries"])
+        if "language_code" in st.session_state:
+            st.session_state["saved_language_code"] = st.session_state["language_code"]
+        if "use_case" in st.session_state:
+            st.session_state["saved_use_case"] = st.session_state["use_case"]
+        if "description" in st.session_state:
+            st.session_state["saved_definition"] = st.session_state["description"]
+        if "modality" in st.session_state and st.session_state["modality"]:
+            st.session_state["saved_modality"] = list(st.session_state["modality"])
+        if "taxonomy_generator_model_select" in st.session_state:
+            st.session_state["saved_tax_model_label"] = st.session_state["taxonomy_generator_model_select"]
     # Snapshot the Autorater widgets before switching tabs (a sidebar click can happen before the Autorater tab body
     # reruns), so edits are not lost when Streamlit garbage-collects the unmounted widgets.
     if "dynamic_rubric_input" in st.session_state:
@@ -1394,7 +1444,7 @@ elif st.session_state.step == "Concept":
             st.markdown("""
 <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
 <span style="font-size: 1.1rem;">🎯</span>
-<label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Target Domain / Concept</label>
+<label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Target Topic</label>
 </div>
 """, unsafe_allow_html=True)
             
@@ -1413,38 +1463,47 @@ elif st.session_state.step == "Concept":
                     "Example: Medical Advice",
                     "Example: Public Health and Safety",
                 ]
-                saved_selector = st.session_state.get("concept_selector", "Custom Domain")
-                idx = preset_options.index(saved_selector) if saved_selector in preset_options else 0
+                if "concept_selector" not in st.session_state or st.session_state["concept_selector"] not in preset_options:
+                    saved_sel = st.session_state.get("saved_concept_selector", st.session_state.get("target_concept", "Custom Domain"))
+                    st.session_state["concept_selector"] = saved_sel if saved_sel in preset_options else "Custom Domain"
                 import inspect as _inspect
                 _sb_kwargs = {"filter_mode": None} if "filter_mode" in _inspect.signature(st.selectbox).parameters else {}
                 selected_concept = st.selectbox(
-                    "Target Concept",
+                    "Target Topic",
                     preset_options,
-                    index=idx,
                     key="concept_selector",
                     label_visibility="collapsed",
+                    on_change=lambda: st.session_state.__setitem__(
+                        "saved_concept_selector", st.session_state.get("concept_selector", "Custom Domain")
+                    ),
                     **_sb_kwargs,
                 )
+                st.session_state["saved_concept_selector"] = selected_concept
                 is_custom_domain = (selected_concept == "Custom Domain")
                 if is_custom_domain:
                     st.markdown(
-                        '<div style="font-size: 0.82rem; font-weight: 700; color: #4f46e5; margin-top: 0.35rem; margin-bottom: 0.25rem;">✏️ Enter Your Custom Domain Name (Required):</div>',
+                        '<div style="font-size: 0.82rem; font-weight: 700; color: #4f46e5; margin-top: 0.35rem; margin-bottom: 0.25rem;">✏️ Enter Your Custom Topic (Required):</div>',
                         unsafe_allow_html=True,
                     )
+                if "custom_domain" not in st.session_state:
+                    st.session_state["custom_domain"] = st.session_state.get("saved_custom_domain", "")
                 custom_domain_val = st.text_input(
-                    "Enter Your Custom Domain Name",
-                    value=st.session_state.get("custom_domain", ""),
+                    "Enter Your Custom Topic",
                     placeholder="👉 Type your custom domain here (e.g., Financial Advice, Legal Guidance, Cybersecurity)...",
                     key="custom_domain",
                     disabled=not is_custom_domain,
                     label_visibility="collapsed" if is_custom_domain else "visible",
+                    on_change=lambda: st.session_state.__setitem__(
+                        "saved_custom_domain", st.session_state.get("custom_domain", "")
+                    ),
                 )
+                st.session_state["saved_custom_domain"] = custom_domain_val
                 if is_custom_domain:
                     st.session_state.target_concept = custom_domain_val.strip() if custom_domain_val.strip() else "Custom Domain"
                 else:
                     st.session_state.target_concept = selected_concept.replace("Example: ", "").strip()
             else:
-                st.text_input("Target Concept", value="Medical Advice", key="target_concept_display", disabled=True, label_visibility="collapsed")
+                st.text_input("Target Topic", value="Medical Advice", key="target_concept_display", disabled=True, label_visibility="collapsed")
                 st.session_state.target_concept = "Medical Advice"
 
             st.markdown("""<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; margin-bottom: 0.5rem;">
@@ -1472,11 +1531,19 @@ elif st.session_state.step == "Concept":
                 "Yemen", "Zambia", "Zimbabwe"
             ]
             if 'target_countries' not in st.session_state:
-                st.session_state.target_countries = ["Global"]
-            else:
-                cleaned_countries = [c for c in st.session_state.target_countries if c in countries_list]
-                st.session_state.target_countries = cleaned_countries if cleaned_countries else ["Global"]
-            st.multiselect("Target Countries", countries_list, key="target_countries", label_visibility="collapsed")
+                st.session_state.target_countries = list(st.session_state.get("saved_countries", ["Global"]))
+            cleaned_countries = [c for c in st.session_state.target_countries if c in countries_list]
+            st.session_state.target_countries = cleaned_countries if cleaned_countries else ["Global"]
+            st.multiselect(
+                "Target Countries",
+                countries_list,
+                key="target_countries",
+                label_visibility="collapsed",
+                on_change=lambda: st.session_state.__setitem__(
+                    "saved_countries", list(st.session_state.get("target_countries") or ["Global"])
+                ),
+            )
+            st.session_state.saved_countries = list(st.session_state.target_countries)
 
             col_lang, col_uc = st.columns(2)
             with col_lang:
@@ -1484,33 +1551,60 @@ elif st.session_state.step == "Concept":
 <span style="font-size: 1.1rem;">🌐</span>
 <label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Language Code</label>
 </div>""", unsafe_allow_html=True)
-                st.text_input("Language Code", value=st.session_state.get("language_code", "en"), key="language_code", label_visibility="collapsed")
+                if "language_code" not in st.session_state:
+                    st.session_state["language_code"] = st.session_state.get("saved_language_code", "en")
+                st.text_input(
+                    "Language Code",
+                    key="language_code",
+                    label_visibility="collapsed",
+                    on_change=lambda: st.session_state.__setitem__(
+                        "saved_language_code", st.session_state.get("language_code", "en")
+                    ),
+                )
+                st.session_state["saved_language_code"] = st.session_state["language_code"]
             with col_uc:
                 st.markdown("""<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; margin-bottom: 0.5rem;">
 <span style="font-size: 1.1rem;">📂</span>
 <label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Use Case</label>
 </div>""", unsafe_allow_html=True)
-                st.text_input("Use Case", value=st.session_state.get("use_case", "Advice seeking"), key="use_case", label_visibility="collapsed")
+                if "use_case" not in st.session_state:
+                    st.session_state["use_case"] = st.session_state.get("saved_use_case", "Advice seeking")
+                st.text_input(
+                    "Use Case",
+                    key="use_case",
+                    label_visibility="collapsed",
+                    on_change=lambda: st.session_state.__setitem__(
+                        "saved_use_case", st.session_state.get("use_case", "Advice seeking")
+                    ),
+                )
+                st.session_state["saved_use_case"] = st.session_state["use_case"]
 
         with col2:
             st.markdown("""<div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
 <span style="font-size: 1.1rem;">📝</span>
-<label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Domain Definition & Scope</label>
+<label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Topic Definition & Scope</label>
 </div>""", unsafe_allow_html=True)
             active_concept_key = st.session_state.get("concept_selector", st.session_state.target_concept) if is_dynamic else st.session_state.target_concept
             default_def = CONCEPT_DEFINITIONS.get(active_concept_key, CONCEPT_DEFINITIONS.get(st.session_state.target_concept, CONCEPT_DEFINITIONS["Custom Domain"]))
             
-            if 'description' not in st.session_state or st.session_state.get('_last_concept') != active_concept_key:
+            if st.session_state.get('_last_concept') != active_concept_key:
                 st.session_state.description = default_def
+                st.session_state.saved_definition = default_def
                 st.session_state._last_concept = active_concept_key
+            elif 'description' not in st.session_state:
+                st.session_state.description = st.session_state.get("saved_definition", default_def)
                 
             st.text_area(
-                "Domain Definition & Scope",
+                "Topic Definition & Scope",
                 key="description",
                 height=130,
                 placeholder="👉 Enter the definition, scope, and safety guidelines for your custom domain here...",
                 label_visibility="collapsed",
+                on_change=lambda: st.session_state.__setitem__(
+                    "saved_definition", st.session_state.get("description", default_def)
+                ),
             )
+            st.session_state.saved_definition = st.session_state.description
 
             st.markdown("""<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; margin-bottom: 0.5rem;">
 <span style="font-size: 1.1rem;">🔄</span>
@@ -1518,7 +1612,15 @@ elif st.session_state.step == "Concept":
 </div>""", unsafe_allow_html=True)
             if 'modality' not in st.session_state or not st.session_state.modality:
                 st.session_state.modality = list(st.session_state.get('saved_modality', ["text-to-image", "text-to-video", "text-to-text"]))
-            st.multiselect("Modality", ["text-to-image", "text-to-video", "text-to-text"], default=st.session_state.modality, key="modality", label_visibility="collapsed")
+            st.multiselect(
+                "Modality",
+                ["text-to-image", "text-to-video", "text-to-text"],
+                key="modality",
+                label_visibility="collapsed",
+                on_change=lambda: st.session_state.__setitem__(
+                    "saved_modality", list(st.session_state.get("modality") or ["text-to-image", "text-to-video", "text-to-text"])
+                ),
+            )
             if st.session_state.get('modality'):
                 st.session_state.saved_modality = list(st.session_state.modality)
 
@@ -1544,28 +1646,46 @@ elif st.session_state.step == "Concept":
 
                 # Model selector for taxonomy generation
                 tax_options = get_selectable_taxonomy_models()
+                tax_option_labels = list(tax_options.keys())
                 st.markdown("""<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; margin-bottom: 0.25rem;">
 <span style="font-size: 1.1rem;">🧠</span>
 <label style="font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Taxonomy Generator Model</label>
 </div>""", unsafe_allow_html=True)
+                if "taxonomy_generator_model_select" not in st.session_state and st.session_state.get("saved_tax_model_label") in tax_option_labels:
+                    st.session_state["taxonomy_generator_model_select"] = st.session_state["saved_tax_model_label"]
+                elif st.session_state.get("taxonomy_generator_model_select") not in tax_option_labels and tax_option_labels:
+                    st.session_state["taxonomy_generator_model_select"] = tax_option_labels[0]
                 selected_tax_label = st.selectbox(
                     "Taxonomy Generator Model",
-                    options=list(tax_options.keys()),
-                    index=0,
+                    options=tax_option_labels,
                     label_visibility="collapsed",
                     key="taxonomy_generator_model_select",
+                    on_change=lambda: st.session_state.__setitem__(
+                        "saved_tax_model_label", st.session_state.get("taxonomy_generator_model_select")
+                    ),
                 )
+                st.session_state["saved_tax_model_label"] = selected_tax_label
                 selected_tax_model = tax_options[selected_tax_label]
 
         st.write("")
         
         # Generation Button
         if not is_dynamic:
+            st.caption("ℹ️ Generating a new taxonomy will reset your current session data and results")
             if st.button("Generate Taxonomy (Simulated)", type="primary"):
                 st.session_state.saved_concept = st.session_state.target_concept
-                st.session_state.saved_countries = st.session_state.target_countries
+                st.session_state.saved_countries = list(st.session_state.target_countries)
+                st.session_state.saved_language_code = st.session_state.get("language_code", "en")
+                st.session_state.saved_use_case = st.session_state.get("use_case", "Advice seeking")
+                st.session_state.saved_definition = st.session_state.get("description", default_def)
                 st.session_state.saved_modality = list(st.session_state.get('modality', ["text-to-image", "text-to-video", "text-to-text"]))
-                for k in ("eval_filtered_data", "eval_filtered_modalities", "saved_data_filter_l1", "saved_data_filter_l2", "saved_data_filter_l3", "saved_data_filter_mod", "saved_data_filter_grounding", "saved_selected_row_indices", "saved_dynamic_rubric", "dynamic_rubric_input", "saved_autorater_judge_model", "dynamic_autorater_judge_select", "autorater_data", "annotation_started"):
+                bg_eval = get_bg_eval_store()
+                if bg_eval.get("cancel_event") is not None:
+                    bg_eval["cancel_event"].set()
+                bg_eval["status"] = "idle"
+                bg_eval["result_df"] = None
+                bg_eval["more_prompts_df"] = None
+                for k in ("eval_filtered_data", "eval_filtered_modalities", "eval_data", "eval_generated", "saved_data_filter_l1", "saved_data_filter_l2", "saved_data_filter_l3", "saved_data_filter_mod", "saved_data_filter_grounding", "saved_selected_row_indices", "saved_dynamic_rubric", "dynamic_rubric_input", "saved_autorater_judge_model", "dynamic_autorater_judge_select", "autorater_data", "annotation_started", "selected_l1", "selected_l2", "selected_l3"):
                     st.session_state.pop(k, None)
                 with st.spinner("Generating Taxonomy (Simulated)..."):
                     time.sleep(1)
@@ -1577,7 +1697,7 @@ elif st.session_state.step == "Concept":
                     except FileNotFoundError:
                         st.error(f"Data file '{csv_file}' not found.")
                         st.stop()
-                    st.session_state.highest_step = max(st.session_state.highest_step, 3)
+                    st.session_state.highest_step = 3
                     st.session_state.step = "Taxonomy"
                     st.rerun()
         else:
@@ -1585,6 +1705,7 @@ elif st.session_state.step == "Concept":
             if st.session_state.get("stop_notice_taxonomy"):
                 st.info(st.session_state.pop("stop_notice_taxonomy"))
 
+            st.caption("ℹ️ Generating a new taxonomy will reset your current session data and results")
             if st.button(f"🚀 Generate Dynamic Taxonomy ({model_short_name})", type="primary"):
                 current_api_keys = get_app_api_keys()
                 chosen_provider = get_model_provider(selected_tax_model)
@@ -1603,13 +1724,22 @@ elif st.session_state.step == "Concept":
                     modal_val = list(st.session_state.get("modality", ["text-to-image", "text-to-video", "text-to-text"]))
 
                     st.session_state.saved_concept = domain
-                    st.session_state.saved_countries = st.session_state.target_countries
+                    st.session_state.saved_concept_selector = selected_concept
+                    st.session_state.saved_custom_domain = custom_domain_val
+                    st.session_state.saved_countries = list(st.session_state.target_countries)
                     st.session_state.saved_definition = dom_def
                     st.session_state.saved_modality = modal_val
                     st.session_state.saved_language_code = lang_code
                     st.session_state.saved_use_case = u_case
+                    st.session_state.saved_tax_model_label = selected_tax_label
                     st.session_state.active_tax_model = selected_tax_model
-                    for k in ("eval_filtered_data", "eval_filtered_modalities", "saved_data_filter_l1", "saved_data_filter_l2", "saved_data_filter_l3", "saved_data_filter_mod", "saved_data_filter_grounding", "saved_selected_row_indices", "saved_dynamic_rubric", "dynamic_rubric_input", "saved_autorater_judge_model", "dynamic_autorater_judge_select", "autorater_data", "annotation_started"):
+                    bg_eval = get_bg_eval_store()
+                    if bg_eval.get("cancel_event") is not None:
+                        bg_eval["cancel_event"].set()
+                    bg_eval["status"] = "idle"
+                    bg_eval["result_df"] = None
+                    bg_eval["more_prompts_df"] = None
+                    for k in ("eval_filtered_data", "eval_filtered_modalities", "eval_data", "eval_generated", "saved_data_filter_l1", "saved_data_filter_l2", "saved_data_filter_l3", "saved_data_filter_mod", "saved_data_filter_grounding", "saved_selected_row_indices", "saved_dynamic_rubric", "dynamic_rubric_input", "saved_autorater_judge_model", "dynamic_autorater_judge_select", "autorater_data", "annotation_started", "selected_l1", "selected_l2", "selected_l3"):
                         st.session_state.pop(k, None)
 
                     col_prog, col_stop = st.columns([4, 1.2])
@@ -1649,7 +1779,7 @@ elif st.session_state.step == "Concept":
                                 heartbeat_callback=lambda: heartbeat_slot.empty(),
                             )
                             st.session_state.demo_data = df_dyn
-                            st.session_state.highest_step = max(st.session_state.highest_step, 3)
+                            st.session_state.highest_step = 3
                             st.session_state.step = "Taxonomy"
                             if hasattr(df_dyn, "attrs") and "grounding_error" in df_dyn.attrs:
                                 st.session_state.grounding_warning = df_dyn.attrs["grounding_error"]
@@ -1721,10 +1851,10 @@ elif st.session_state.step == "Taxonomy":
 <div style="background: white; border: 1px solid #e2e8f0; border-radius: 16px; padding: 1.25rem 1.5rem; margin-bottom: 0.75rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
 <div>
 <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800; color: #0f172a; letter-spacing: -0.01em; font-family: 'Inter', sans-serif;">Taxonomy Flow Visualizer</h3>
-<p style="margin: 4px 0 0 0; font-size: 0.78rem; color: #94a3b8; font-family: 'Inter', sans-serif;">Domain → L1 → L2 → L3 → Country → User Group</p>
+<p style="margin: 4px 0 0 0; font-size: 0.78rem; color: #94a3b8; font-family: 'Inter', sans-serif;">Target Topic → L1 → L2 → L3 → Country → User Group</p>
 </div>
 <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
-<span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; border-radius: 3px; background: #4f46e5;"></span><span style="font-size: 11px; color: #64748b; font-weight: 600;">Domain</span></span>
+<span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; border-radius: 3px; background: #4f46e5;"></span><span style="font-size: 11px; color: #64748b; font-weight: 600;">Target Topic</span></span>
 <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; border-radius: 3px; background: #7c3aed;"></span><span style="font-size: 11px; color: #64748b; font-weight: 600;">L1</span></span>
 <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; border-radius: 3px; background: #db2777;"></span><span style="font-size: 11px; color: #64748b; font-weight: 600;">L2</span></span>
 <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 10px; border-radius: 3px; background: #ea580c;"></span><span style="font-size: 11px; color: #64748b; font-weight: 600;">L3</span></span>
@@ -2510,7 +2640,7 @@ elif st.session_state.step == "Data":
             'prompts': 'Synthetic Prompt',
             'complexity': 'Complexity Score',
             'extracted_Country': 'Country',
-            'Domain': 'Domain',
+            'Domain': 'Target Topic',
             'grounding_status': 'Grounding',
         })
 
@@ -2616,6 +2746,7 @@ elif st.session_state.step == "Data":
                 "Grounding": st.column_config.TextColumn("Grounding", width="small"),
                 "Synthetic Prompt": st.column_config.TextColumn("Synthetic Prompt", width="large"),
                 "Complexity Score": st.column_config.NumberColumn("Complexity Score", format="%.1f/10"),
+                "Target Topic": st.column_config.TextColumn("Target Topic", width="small"),
             }
         )
 
@@ -2891,6 +3022,9 @@ elif st.session_state.step == "Evaluation":
                             saved_concept_val = st.session_state.get('saved_concept', 'Medical Advice')
                             saved_countries_val = st.session_state.get('saved_countries', ['Global'])
                             saved_def_val = st.session_state.get('saved_definition', '')
+                            saved_language_code = st.session_state.get("saved_language_code", "en")
+                            saved_use_case = st.session_state.get("saved_use_case", "Advice seeking")
+                            saved_modality = list(st.session_state.get("saved_modality", ["text-to-image", "text-to-video", "text-to-text"]))
                             prompt_model_val = st.session_state.get("active_tax_model", "gemini-3.5-flash-lite")
                             source_df_copy = source_df.copy()
                             models_copy = list(target_model_tuples)
@@ -2941,6 +3075,9 @@ elif st.session_state.step == "Evaluation":
                                             api_key=current_keys.get("gemini"),
                                             api_keys=current_keys,
                                             model=prompt_model_val,
+                                            modality=saved_modality,
+                                            use_case=saved_use_case,
+                                            language_code=saved_language_code,
                                             cancel_event=bg_cancel_ev,
                                         )
                                         if not more_prompts_df.empty:
@@ -3312,6 +3449,9 @@ elif st.session_state.step == "Evaluation":
                             saved_concept_val = st.session_state.get('saved_concept', 'Medical Advice')
                             saved_countries_val = st.session_state.get('saved_countries', ['Global'])
                             saved_def_val = st.session_state.get('saved_definition', '')
+                            saved_language_code = st.session_state.get("saved_language_code", "en")
+                            saved_use_case = st.session_state.get("saved_use_case", "Advice seeking")
+                            saved_modality = list(st.session_state.get("saved_modality", ["text-to-image", "text-to-video", "text-to-text"]))
                             prompt_model_val = st.session_state.get("active_tax_model", "gemini-3.5-flash-lite")
                             models_copy = list(target_model_tuples)
 
@@ -3351,6 +3491,9 @@ elif st.session_state.step == "Evaluation":
                                             api_key=current_keys.get("gemini"),
                                             api_keys=current_keys,
                                             model=prompt_model_val,
+                                            modality=saved_modality,
+                                            use_case=saved_use_case,
+                                            language_code=saved_language_code,
                                             cancel_event=bg_cancel_ev,
                                         )
                                         if not more_prompts_df.empty:
@@ -3440,6 +3583,8 @@ elif st.session_state.step == "Evaluation":
                     if st.button("🔄 Re-run Evaluation", use_container_width=True):
                         st.session_state.eval_data = pd.DataFrame()
                         st.session_state.eval_generated = False
+                        st.session_state.pop("autorater_data", None)
+                        st.session_state.pop("annotation_started", None)
                         st.rerun()
                 with col_new_c:
                     if st.button("🔄 Configure New Concept", use_container_width=True):

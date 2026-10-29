@@ -120,7 +120,7 @@ const flowCols={json.dumps(flow_cols)};
 const levelColors={json.dumps(colors)};
 const lightColors={json.dumps(light_colors)};
 const filterCfg={json.dumps(filters)};
-const levelLabels={json.dumps({c: c.replace('cleaned_Country','Country').replace('level','L').replace('user_group','User Group').replace('Domain','Domain') for c in flow_cols})};
+const levelLabels={json.dumps({c: c.replace('cleaned_Country','Country').replace('level','L').replace('user_group','User Group').replace('Domain','Target Topic') for c in flow_cols})};
 const scale = {scale_factor};
 const W = Math.max(document.documentElement.clientWidth - 20, 1500) * scale;
 const H = {height} * scale;
@@ -196,7 +196,7 @@ function render(){{
     .style('cursor','grab')
     .on('mouseover',(e,d)=>{{tip.style.opacity=1;
       tip.innerHTML='<b>'+d.name+'</b><br><span style="color:#94a3b8">'+
-        (d.level==='cleaned_Country'?'Country':d.level.replace('level','L').replace('user_group','User Group'))+'</span><br>'+d.value+' total'}})
+        (d.level==='cleaned_Country'?'Country':d.level.replace('level','L').replace('user_group','User Group').replace('Domain','Target Topic'))+'</span><br>'+d.value+' total'}})
     .on('mousemove',e=>{{tip.style.left=(e.clientX+14)+'px';tip.style.top=(e.clientY-10)+'px'}})
     .on('mouseout',()=>{{tip.style.opacity=0}});
 
