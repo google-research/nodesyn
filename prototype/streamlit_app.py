@@ -3987,8 +3987,31 @@ Violation - Safety Issue
 </div>
 """, unsafe_allow_html=True)
 
-                    display_feedback = autorater_df[['query', 'target_model', 'response', 'label']].copy()
+                    has_rationale = (
+                        "rationale" in autorater_df.columns
+                        and autorater_df["rationale"].fillna("").astype(str).str.strip().ne("").any()
+                    )
+                    feedback_cols = ["query", "target_model", "response", "label"] + (
+                        ["rationale"] if has_rationale else []
+                    )
+                    display_feedback = autorater_df[[c for c in feedback_cols if c in autorater_df.columns]].copy()
                     display_feedback = display_feedback.rename(columns={'target_model': 'model name'})
+
+                    # --- Table Filters (Model Name & Autorater Label) ---
+                    st.markdown('<div style="margin-top: 0.5rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;"><span style="color: #6366f1; font-size: 14px;">🔍</span><span style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Table Filters</span></div>', unsafe_allow_html=True)
+                    col_af1, col_af2 = st.columns(2)
+                    with col_af1:
+                        af_model_options = sorted(display_feedback['model name'].dropna().unique().tolist())
+                        selected_af_models = st.multiselect("Model Name", options=af_model_options, placeholder="All Models", key="dynamic_autorater_filter_model")
+                    with col_af2:
+                        af_label_options = sorted(display_feedback['label'].dropna().unique().tolist())
+                        selected_af_labels = st.multiselect("Autorater Label", options=af_label_options, placeholder="All Autorater Labels", key="dynamic_autorater_filter_label")
+
+                    if selected_af_models:
+                        display_feedback = display_feedback[display_feedback['model name'].isin(selected_af_models)]
+                    if selected_af_labels:
+                        display_feedback = display_feedback[display_feedback['label'].isin(selected_af_labels)]
+
                     display_feedback = display_feedback.reset_index(drop=True)
                     display_feedback.insert(0, '#', list(range(1, len(display_feedback) + 1)))
                     display_feedback.index = range(1, len(display_feedback) + 1)
@@ -4004,18 +4027,24 @@ Violation - Safety Issue
                             use_container_width=True,
                         )
 
+                    feedback_col_config = {
+                        "#": st.column_config.NumberColumn("#", width="small"),
+                        "query": st.column_config.TextColumn("Query", width="medium"),
+                        "model name": st.column_config.TextColumn("Model Name", width="small"),
+                        "response": st.column_config.TextColumn("Model Response", width="large"),
+                        "label": st.column_config.TextColumn("Autorater Label", width="medium"),
+                    }
+                    if has_rationale:
+                        feedback_col_config["rationale"] = st.column_config.TextColumn(
+                            "Autorater Rationale", width="large"
+                        )
+
                     st.dataframe(
                         display_feedback,
                         use_container_width=True,
                         height=480,
                         hide_index=True,
-                        column_config={
-                            "#": st.column_config.NumberColumn("#", width="small"),
-                            "query": st.column_config.TextColumn("Query", width="medium"),
-                            "model name": st.column_config.TextColumn("Model Name", width="small"),
-                            "response": st.column_config.TextColumn("Model Response", width="large"),
-                            "label": st.column_config.TextColumn("Autorater Label", width="medium"),
-                        }
+                        column_config=feedback_col_config,
                     )
                 else:
                     st.info("👈 Review or modify the rubric on the left, then click **'🚀 Run Autorater'** to generate structured ratings.")
@@ -4481,22 +4510,50 @@ elif st.session_state.step == "Analysis":
             return []
         text = str(rubric_str)
         labels: list[str] = []
-        # 1. Check lines after 'Response Format Constraint'
-        if "Response Format Constraint" in text:
-            after = text.split("Response Format Constraint", 1)[1]
-            for line in after.splitlines():
-                s = line.strip().strip("-*•`\"' ")
-                if not s:
-                    continue
-                if s.lower().startswith("your output must be") or s.startswith("#"):
-                    continue
-                if len(s) <= 80 and s not in labels:
-                    labels.append(s)
-        # 2. Check bullet/numbered definitions like '- **Label Name**:' or '1. **Label Name** (note):'
+        # 1. Check bullet/numbered definitions like '- **Label Name**:' or '1. **Label Name** (note):'
         for m in re.finditer(r"^\s*(?:[-*•]|\d+\.)\s*\*\*([^*:\n]{2,70})\*\*\s*(?:\([^)\n]*\))?\s*:", text, flags=re.MULTILINE):
             cand = m.group(1).strip()
             if cand and cand not in labels:
                 labels.append(cand)
+        # 2. Check lines after 'Response Format Constraint'
+        if "Response Format Constraint" in text:
+            after = text.split("Response Format Constraint", 1)[1]
+            skip_prefixes = (
+                "your output",
+                "output",
+                "please",
+                "provide",
+                "include",
+                "explain",
+                "first",
+                "then",
+                "rationale",
+                "reasoning",
+                "explanation",
+                "chain of thought",
+                "chain-of-thought",
+                "cot",
+                "format",
+                "return",
+                "write",
+                "step",
+                "input:",
+                "query:",
+                "llm response:",
+                "classification:",
+            )
+            for line in after.splitlines():
+                raw_line = line.strip()
+                if raw_line.lower().startswith(("input:", "### input", "query:")):
+                    break
+                s = raw_line.strip("-*•`\"' ")
+                if not s or s.startswith("#") or s.endswith(":"):
+                    continue
+                s_low = s.lower()
+                if any(s_low.startswith(p) for p in skip_prefixes):
+                    continue
+                if len(s) <= 80 and s not in labels:
+                    labels.append(s)
         return labels
 
     active_concept_for_rubric = st.session_state.get("saved_concept", st.session_state.get("target_concept", "Medical Advice"))
@@ -5853,6 +5910,260 @@ details.expand-phrases[open] > summary {
                 left_margin=350,
             )
             st.plotly_chart(fig_t9, use_container_width=True)
+        else:
+            st.warning("Analysis data not found.")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 3: Qualitative Rating & Failure Inspector
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("""
+<div style="display: flex; align-items: center; gap: 0.75rem; margin: 3rem 0 1.25rem 0;">
+  <div style="width: 6px; height: 32px; background: linear-gradient(180deg, #0ea5e9, #6366f1); border-radius: 3px;"></div>
+  <h3 style="margin: 0; font-size: 1.35rem; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; font-family: 'Inter', sans-serif;">Qualitative Rating &amp; Failure Inspector</h3>
+  <span style="font-size: 0.8rem; color: #94a3b8; font-family: 'Inter', sans-serif; margin-left: 0.5rem;">Filter individual model responses, inspect Autorater rationales, and compare models side-by-side</span>
+</div>
+""", unsafe_allow_html=True)
+
+    insp_tab1, insp_tab2 = st.tabs([
+        "🔍 Inspect Rated Responses",
+        "⚖️ Side-by-Side Query Comparator",
+    ])
+
+    with insp_tab1:
+        if not df_med_plot_cleaned.empty:
+            insp_df = df_med_plot_cleaned.copy()
+            if "prompts" not in insp_df.columns and "query" in insp_df.columns:
+                insp_df["prompts"] = insp_df["query"]
+            if "response" not in insp_df.columns:
+                insp_df["response"] = ""
+            if "rationale" not in insp_df.columns:
+                insp_df["rationale"] = ""
+            insp_df["rationale"] = insp_df["rationale"].fillna("").astype(str).replace({"nan": "", "None": ""})
+            has_insp_rationale = insp_df["rationale"].str.strip().ne("").any()
+
+            col_if1, col_if2, col_if3, col_if4 = st.columns(4)
+            with col_if1:
+                insp_model_opts = sorted(insp_df["Model"].dropna().unique().tolist())
+                sel_insp_models = st.multiselect(
+                    "Model",
+                    options=insp_model_opts,
+                    placeholder="All Models",
+                    key="analysis_insp_model",
+                )
+            with col_if2:
+                insp_label_opts = [
+                    lbl for lbl in all_autorater_labels if lbl in insp_df["Safety Status"].unique()
+                ] or sorted(insp_df["Safety Status"].dropna().unique().tolist())
+                sel_insp_labels = st.multiselect(
+                    "Autorater Label",
+                    options=insp_label_opts,
+                    placeholder="All Labels",
+                    key="analysis_insp_label",
+                )
+            with col_if3:
+                insp_l1_opts = sorted(insp_df["level1"].dropna().unique().tolist()) if "level1" in insp_df.columns else []
+                sel_insp_l1 = st.multiselect(
+                    "L1 Category",
+                    options=insp_l1_opts,
+                    placeholder="All L1 Categories",
+                    key="analysis_insp_l1",
+                )
+            with col_if4:
+                l2_source_df = insp_df[insp_df["level1"].isin(sel_insp_l1)] if (sel_insp_l1 and "level1" in insp_df.columns) else insp_df
+                insp_l2_opts = sorted(l2_source_df["level2"].dropna().unique().tolist()) if "level2" in l2_source_df.columns else []
+                sel_insp_l2 = st.multiselect(
+                    "L2 Subtopic",
+                    options=insp_l2_opts,
+                    placeholder="All L2 Subtopics",
+                    key="analysis_insp_l2",
+                )
+
+            insp_search_kw = st.text_input(
+                "🔎 Search Query, Response, or Rationale",
+                placeholder="Type keywords to filter queries, model responses, or judge rationales...",
+                key="analysis_insp_search",
+            )
+
+            filtered_insp = insp_df
+            if sel_insp_models:
+                filtered_insp = filtered_insp[filtered_insp["Model"].isin(sel_insp_models)]
+            if sel_insp_labels:
+                filtered_insp = filtered_insp[filtered_insp["Safety Status"].isin(sel_insp_labels)]
+            if sel_insp_l1 and "level1" in filtered_insp.columns:
+                filtered_insp = filtered_insp[filtered_insp["level1"].isin(sel_insp_l1)]
+            if sel_insp_l2 and "level2" in filtered_insp.columns:
+                filtered_insp = filtered_insp[filtered_insp["level2"].isin(sel_insp_l2)]
+            if insp_search_kw and insp_search_kw.strip():
+                kw = insp_search_kw.strip()
+                q_match = filtered_insp["prompts"].astype(str).str.contains(kw, case=False, na=False, regex=False)
+                r_match = filtered_insp["response"].astype(str).str.contains(kw, case=False, na=False, regex=False)
+                rat_match = filtered_insp["rationale"].astype(str).str.contains(kw, case=False, na=False, regex=False)
+                filtered_insp = filtered_insp[q_match | r_match | rat_match]
+
+            insp_cols_order = (
+                ["prompts", "Model", "response", "Safety Status"]
+                + (["rationale"] if has_insp_rationale else [])
+                + ["level1", "level2", "user_group", "extracted_Country"]
+            )
+            avail_insp_cols = [c for c in insp_cols_order if c in filtered_insp.columns]
+            insp_display = filtered_insp[avail_insp_cols].copy().reset_index(drop=True)
+            insp_display.insert(0, "#", list(range(1, len(insp_display) + 1)))
+
+            col_insp_stat, col_insp_dl = st.columns([2.5, 1.2])
+            with col_insp_stat:
+                st.markdown(
+                    f"<div style='padding-top: 0.45rem; font-size: 0.85rem; color: #475569; font-family: \"Inter\", sans-serif;'>"
+                    f"Showing <b>{len(insp_display)}</b> of <b>{len(insp_df)}</b> rated model responses</div>",
+                    unsafe_allow_html=True,
+                )
+            with col_insp_dl:
+                insp_csv = insp_display.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "📥 Download Filtered Ratings (CSV)",
+                    data=insp_csv,
+                    file_name="filtered_autorater_inspection.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="analysis_insp_download_csv",
+                )
+
+            insp_col_cfg = {
+                "#": st.column_config.NumberColumn("#", width="small"),
+                "prompts": st.column_config.TextColumn("Query", width="medium"),
+                "Model": st.column_config.TextColumn("Model Name", width="small"),
+                "response": st.column_config.TextColumn("Model Response", width="large"),
+                "Safety Status": st.column_config.TextColumn("Autorater Label", width="medium"),
+                "level1": st.column_config.TextColumn("L1 Category", width="medium"),
+                "level2": st.column_config.TextColumn("L2 Subtopic", width="medium"),
+                "user_group": st.column_config.TextColumn("User Group", width="small"),
+                "extracted_Country": st.column_config.TextColumn("Country", width="small"),
+            }
+            if has_insp_rationale:
+                insp_col_cfg["rationale"] = st.column_config.TextColumn("Autorater Rationale", width="large")
+
+            st.dataframe(
+                insp_display,
+                use_container_width=True,
+                height=460,
+                hide_index=True,
+                column_config=insp_col_cfg,
+            )
+        else:
+            st.warning("Analysis data not found.")
+
+    with insp_tab2:
+        if not df_med_plot_cleaned.empty:
+            import html as _html
+
+            sbs_df = df_med_plot_cleaned.copy()
+            if "prompts" not in sbs_df.columns and "query" in sbs_df.columns:
+                sbs_df["prompts"] = sbs_df["query"]
+            if "response" not in sbs_df.columns:
+                sbs_df["response"] = ""
+            if "rationale" not in sbs_df.columns:
+                sbs_df["rationale"] = ""
+            sbs_df["rationale"] = sbs_df["rationale"].fillna("").astype(str).replace({"nan": "", "None": ""})
+
+            n_eval_models = sbs_df["Model"].nunique()
+            disagree_only = False
+            if n_eval_models > 1:
+                disagree_only = st.checkbox(
+                    "🔥 Show only queries where evaluated models received different Autorater Labels",
+                    value=False,
+                    key="analysis_sbs_disagree_only",
+                )
+
+            all_sbs_queries = list(dict.fromkeys(sbs_df["prompts"].dropna().astype(str).tolist()))
+            if disagree_only and n_eval_models > 1:
+                label_counts_by_q = sbs_df.groupby("prompts")["Safety Status"].nunique()
+                disagree_q_set = set(label_counts_by_q[label_counts_by_q > 1].index.astype(str))
+                sbs_queries = [q for q in all_sbs_queries if q in disagree_q_set]
+                if not sbs_queries:
+                    st.info("💡 All evaluated models received identical Autorater Labels across the current queries. Showing all queries below:")
+                    sbs_queries = all_sbs_queries
+            else:
+                sbs_queries = all_sbs_queries
+
+            if sbs_queries:
+                selected_sbs_query = st.selectbox(
+                    "Select a Query to Compare Responses & Ratings Side-by-Side",
+                    options=sbs_queries,
+                    key="analysis_sbs_query_select",
+                )
+                q_rows = sbs_df[sbs_df["prompts"].astype(str) == str(selected_sbs_query)].copy()
+                if not q_rows.empty:
+                    first_row = q_rows.iloc[0]
+                    q_l1 = _html.escape(str(first_row.get("level1", "General")))
+                    q_l2 = _html.escape(str(first_row.get("level2", "General")))
+                    q_ug = _html.escape(str(first_row.get("user_group", "General Public")))
+                    q_ctry = _html.escape(str(first_row.get("extracted_Country", "Global")))
+                    q_escaped = _html.escape(str(selected_sbs_query))
+
+                    st.markdown(f"""
+<div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1rem 1.25rem; margin: 0.5rem 0 1rem 0;">
+  <div style="font-size: 0.72rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.35rem;">Evaluated Prompt / Query</div>
+  <div style="font-size: 0.98rem; font-weight: 600; color: #0f172a; line-height: 1.5; margin-bottom: 0.65rem;">{q_escaped}</div>
+  <div style="display: flex; flex-wrap: wrap; gap: 0.45rem;">
+    <span style="background: #eef2ff; color: #4338ca; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.73rem; font-weight: 600;">L1: {q_l1}</span>
+    <span style="background: #f0fdf4; color: #15803d; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.73rem; font-weight: 600;">L2: {q_l2}</span>
+    <span style="background: #fdf2f8; color: #be185d; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.73rem; font-weight: 600;">User Group: {q_ug}</span>
+    <span style="background: #f1f5f9; color: #334155; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.73rem; font-weight: 600;">Country: {q_ctry}</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+                    def _get_badge_colors(lbl_str: str) -> tuple[str, str, str]:
+                        l_low = lbl_str.lower()
+                        if (
+                            (all_autorater_labels and lbl_str == all_autorater_labels[-1])
+                            or any(k in l_low for k in ("no disclosure", "violation", "unsafe", "harmful", "fail"))
+                        ):
+                            return "#fef2f2", "#b91c1c", "#fecaca"
+                        if (
+                            (all_autorater_labels and lbl_str == all_autorater_labels[0])
+                            or any(k in l_low for k in ("with instructions", "appropriate refusal", "grounded", "safe -"))
+                        ):
+                            return "#ecfdf5", "#047857", "#a7f3d0"
+                        return "#fffbeb", "#b45309", "#fde68a"
+
+                    q_models = sorted(q_rows["Model"].unique().tolist())
+                    cols_per_row = min(max(len(q_models), 1), 3)
+                    for start_idx in range(0, len(q_models), cols_per_row):
+                        batch_models = q_models[start_idx : start_idx + cols_per_row]
+                        sbs_cols = st.columns(len(batch_models))
+                        for c_idx, m_name in enumerate(batch_models):
+                            m_row = q_rows[q_rows["Model"] == m_name].iloc[0]
+                            m_lbl = str(m_row.get("Safety Status", "")).strip()
+                            m_resp = str(m_row.get("response", "")).strip() or "(No response text recorded)"
+                            m_rat = str(m_row.get("rationale", "")).strip()
+                            m_accent = MODEL_COLORS.get(m_name, {"line": "#6366f1"})["line"]
+                            b_bg, b_fg, b_border = _get_badge_colors(m_lbl)
+
+                            m_name_esc = _html.escape(str(m_name))
+                            m_lbl_esc = _html.escape(m_lbl)
+                            m_resp_esc = _html.escape(m_resp)
+                            rat_block_html = ""
+                            if m_rat:
+                                m_rat_esc = _html.escape(m_rat)
+                                rat_block_html = f"""
+  <div style="background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 6px; padding: 0.6rem 0.75rem; margin-bottom: 0.75rem;">
+    <div style="font-size: 0.68rem; font-weight: 800; color: #1d4ed8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.2rem;">🧠 Judge Rationale</div>
+    <div style="font-size: 0.8rem; color: #1e3a8a; line-height: 1.45; white-space: pre-wrap;">{m_rat_esc}</div>
+  </div>"""
+
+                            with sbs_cols[c_idx]:
+                                st.markdown(f"""
+<div style="background: white; border: 1px solid #e2e8f0; border-top: 4px solid {m_accent}; border-radius: 12px; padding: 1rem; height: 100%; box-shadow: 0 1px 2px rgba(15,23,42,0.04);">
+  <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap;">
+    <div style="font-size: 0.95rem; font-weight: 800; color: #0f172a; font-family: 'Inter', sans-serif;">{m_name_esc}</div>
+    <span style="background: {b_bg}; color: {b_fg}; border: 1px solid {b_border}; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700;">{m_lbl_esc}</span>
+  </div>{rat_block_html}
+  <div style="font-size: 0.68rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Model Response</div>
+  <div style="font-size: 0.82rem; color: #334155; line-height: 1.55; white-space: pre-wrap; max-height: 340px; overflow-y: auto; background: #f8fafc; padding: 0.65rem 0.75rem; border-radius: 8px; border: 1px solid #f1f5f9;">{m_resp_esc}</div>
+</div>
+""", unsafe_allow_html=True)
+            else:
+                st.info("No queries available for comparison.")
         else:
             st.warning("Analysis data not found.")
 

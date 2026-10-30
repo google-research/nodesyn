@@ -3004,6 +3004,262 @@ class AutoraterJudgeGenerator:
     def __init__(self, gemini_utils: GeminiUtils):
         self._gemini_utils = gemini_utils
 
+    @staticmethod
+    def _extract_rubric_labels(rubric_str: str) -> list[str]:
+        """Extracts candidate classification labels defined in the Autorater rubric text."""
+        if not rubric_str or not str(rubric_str).strip():
+            return []
+        text = str(rubric_str)
+        labels: list[str] = []
+
+        # 1. Check bullet/numbered definitions like '- **Label Name**:' or '1. **Label Name** (note):'
+        for m in re.finditer(
+            r"^\s*(?:[-*•]|\d+\.)\s*\*\*([^*:\n]{2,70})\*\*\s*(?:\([^)\n]*\))?\s*:",
+            text,
+            flags=re.MULTILINE,
+        ):
+            cand = m.group(1).strip()
+            if cand and cand not in labels:
+                labels.append(cand)
+
+        # 2. Check lines after 'Response Format Constraint'
+        if "Response Format Constraint" in text:
+            after = text.split("Response Format Constraint", 1)[1]
+            skip_prefixes = (
+                "your output",
+                "output",
+                "please",
+                "provide",
+                "include",
+                "explain",
+                "first",
+                "then",
+                "rationale",
+                "reasoning",
+                "explanation",
+                "chain of thought",
+                "chain-of-thought",
+                "cot",
+                "format",
+                "return",
+                "write",
+                "step",
+                "input:",
+                "query:",
+                "llm response:",
+                "classification:",
+            )
+            for line in after.splitlines():
+                raw_line = line.strip()
+                if raw_line.lower().startswith(("input:", "### input", "query:")):
+                    break
+                s = raw_line.strip("-*•`\"' ")
+                if not s or s.startswith("#") or s.endswith(":"):
+                    continue
+                s_low = s.lower()
+                if any(s_low.startswith(p) for p in skip_prefixes):
+                    continue
+                if len(s) <= 80 and s not in labels:
+                    labels.append(s)
+
+        return labels
+
+    @classmethod
+    def _parse_autorater_output(
+        cls, raw_text: str, candidate_labels: list[str] | None = None
+    ) -> tuple[str, str]:
+        """Parses judge output into (label, rationale), supporting CoT before or after the label and JSON."""
+        cands = [c.strip() for c in (candidate_labels or []) if c and str(c).strip()]
+        cands_sorted = sorted(cands, key=len, reverse=True)
+        default_label = cands[-1] if cands else "No disclosure"
+
+        if not raw_text or not str(raw_text).strip():
+            return default_label, ""
+
+        text = str(raw_text).strip()
+        # Strip outer markdown code fences if present
+        text = re.sub(r"^```(?:json|text|markdown)?\s*", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s*```$", "", text).strip()
+
+        def _match_candidate(val_str: str) -> str | None:
+            if not cands or not val_str:
+                return None
+            cleaned = val_str.strip().strip(' *"\'`._-:;()[]')
+            if not cleaned:
+                return None
+            cleaned_low = cleaned.lower()
+            for c in cands:
+                if cleaned_low == c.lower():
+                    return c
+            for c in cands_sorted:
+                if re.search(r"(?<![a-z0-9])" + re.escape(c.lower()) + r"(?![a-z0-9])", cleaned_low):
+                    return c
+            return None
+
+        # 1. Try JSON parsing if braces are present
+        if "{" in text and "}" in text:
+            start_b = text.find("{")
+            end_b = text.rfind("}")
+            if start_b < end_b:
+                try:
+                    parsed = json.loads(text[start_b : end_b + 1])
+                    if isinstance(parsed, dict):
+                        lower_map = {str(k).lower().strip(): v for k, v in parsed.items()}
+                        raw_lbl = None
+                        for k in ("label", "classification", "rating", "verdict", "category", "final_label", "decision", "status"):
+                            if k in lower_map and lower_map[k] is not None:
+                                raw_lbl = str(lower_map[k]).strip()
+                                break
+                        raw_rat = ""
+                        for k in ("rationale", "reasoning", "explanation", "cot", "chain_of_thought", "analysis", "justification", "thought", "thoughts"):
+                            if k in lower_map and lower_map[k] is not None:
+                                raw_rat = str(lower_map[k]).strip()
+                                break
+                        if raw_lbl:
+                            matched = _match_candidate(raw_lbl)
+                            return (matched or raw_lbl.strip(' *"\'`')), raw_rat
+                except Exception:
+                    pass
+
+        label_prefix_re = re.compile(
+            r"^(?:[*#>-]+\s*)?(?:final\s+)?(?:label|classification|rating|verdict|category|decision)\s*:\s*(.*)$",
+            re.IGNORECASE,
+        )
+        rationale_prefix_re = re.compile(
+            r"^(?:[*#>-]+\s*)?(?:rationale|reasoning|explanation|chain[- ]of[- ]thought|cot|analysis|justification|thoughts?)\s*:\s*(.*)$",
+            re.IGNORECASE,
+        )
+        inline_rationale_split_re = re.compile(
+            r"\s*(?:\||;|-+|\b)\s*(?:rationale|reasoning|explanation|chain[- ]of[- ]thought|cot|analysis|justification)\s*:\s*",
+            re.IGNORECASE,
+        )
+        inline_label_split_re = re.compile(
+            r"\s*(?:\||;|-+|\b)\s*(?:final\s+)?(?:label|classification|rating|verdict|category|decision)\s*:\s*",
+            re.IGNORECASE,
+        )
+
+        raw_lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if not raw_lines:
+            return default_label, ""
+
+        # Handle single-line output that contains both inline rationale and label markers
+        if len(raw_lines) == 1:
+            single = raw_lines[0]
+            if rationale_prefix_re.match(single) and inline_label_split_re.search(single):
+                parts = inline_label_split_re.split(single, maxsplit=1)
+                rat_part = rationale_prefix_re.sub(r"\1", parts[0]).strip(' *"\'`|-')
+                lbl_part = parts[1].strip(' *"\'`._')
+                matched = _match_candidate(lbl_part)
+                return (matched or lbl_part or default_label), rat_part
+            if inline_rationale_split_re.search(single):
+                parts = inline_rationale_split_re.split(single, maxsplit=1)
+                lbl_part = label_prefix_re.sub(r"\1", parts[0]).strip(' *"\'`|-')
+                rat_part = parts[1].strip(' *"\'`')
+                matched = _match_candidate(lbl_part)
+                return (matched or lbl_part or default_label), rat_part
+
+        chosen_label: str | None = None
+        excluded_indices: set[int] = set()
+        inline_extra_rationale: list[str] = []
+
+        # Pass 1: Look for explicit 'Label: ...' / 'Classification: ...' / 'Verdict: ...' lines (reverse order favors final verdict after CoT)
+        for idx in range(len(raw_lines) - 1, -1, -1):
+            ln = raw_lines[idx]
+            m = label_prefix_re.match(ln)
+            if m:
+                val = m.group(1).strip()
+                if val:
+                    if inline_rationale_split_re.search(val):
+                        v_parts = inline_rationale_split_re.split(val, maxsplit=1)
+                        val = v_parts[0].strip()
+                        if v_parts[1].strip():
+                            inline_extra_rationale.append(v_parts[1].strip())
+                    cleaned_val = val.strip(' *"\'`._')
+                    matched = _match_candidate(cleaned_val)
+                    chosen_label = matched or cleaned_val
+                    excluded_indices.add(idx)
+                    break
+                elif idx + 1 < len(raw_lines):
+                    next_val = raw_lines[idx + 1].strip(' *"\'`._')
+                    matched = _match_candidate(next_val)
+                    chosen_label = matched or next_val
+                    excluded_indices.add(idx)
+                    excluded_indices.add(idx + 1)
+                    break
+
+        # Pass 2: Match against candidate_labels if no explicit prefix was used
+        if not chosen_label and cands:
+            # 2a. Check for exact line match against candidate labels (last line first, then first line, then others)
+            search_order = list(range(len(raw_lines) - 1, -1, -1))
+            if len(search_order) > 1:
+                search_order = [len(raw_lines) - 1, 0] + [i for i in range(len(raw_lines) - 2, 0, -1)]
+            for idx in search_order:
+                ln = raw_lines[idx]
+                if rationale_prefix_re.match(ln):
+                    continue
+                cleaned_ln = ln.strip(' *"\'`._-:;•')
+                for c in cands:
+                    if cleaned_ln.lower() == c.lower():
+                        chosen_label = c
+                        excluded_indices.add(idx)
+                        break
+                if chosen_label:
+                    break
+
+            # 2b. Check substring match on non-rationale lines (last line first, then first line, then others)
+            if not chosen_label:
+                for idx in search_order:
+                    ln = raw_lines[idx]
+                    if rationale_prefix_re.match(ln):
+                        continue
+                    matched = _match_candidate(ln)
+                    if matched:
+                        chosen_label = matched
+                        # Exclude this line from rationale if it is primarily just the label/verdict
+                        if len(ln) <= len(matched) + 35:
+                            excluded_indices.add(idx)
+                        break
+
+            # 2c. Even if a rationale line contains the verdict at the very end, extract the label while keeping rationale
+            if not chosen_label:
+                for idx in search_order:
+                    matched = _match_candidate(raw_lines[idx])
+                    if matched:
+                        chosen_label = matched
+                        break
+
+        # Pass 3: Fallback heuristic when candidate_labels were not matched or not provided
+        if not chosen_label:
+            if len(raw_lines) == 1:
+                chosen_label = label_prefix_re.sub(r"\1", raw_lines[0]).strip(' *"\'`._')
+                excluded_indices.add(0)
+            else:
+                first_ln = raw_lines[0]
+                last_ln = raw_lines[-1]
+                first_is_rat = bool(rationale_prefix_re.match(first_ln))
+                last_is_rat = bool(rationale_prefix_re.match(last_ln))
+                if not last_is_rat and (first_is_rat or (len(last_ln) <= 75 and len(first_ln) > len(last_ln))):
+                    chosen_label = last_ln.strip(' *"\'`._')
+                    excluded_indices.add(len(raw_lines) - 1)
+                else:
+                    chosen_label = first_ln.strip(' *"\'`._')
+                    excluded_indices.add(0)
+
+        if not chosen_label:
+            chosen_label = default_label
+
+        # Collect remaining lines as rationale
+        rationale_lines: list[str] = list(inline_extra_rationale)
+        for idx, ln in enumerate(raw_lines):
+            if idx in excluded_indices:
+                continue
+            cleaned_rat = rationale_prefix_re.sub(r"\1", ln).strip()
+            if cleaned_rat:
+                rationale_lines.append(cleaned_rat)
+
+        rationale_str = "\n".join(rationale_lines).strip()
+        return chosen_label, rationale_str
+
     def rate(
         self,
         eval_df: pd.DataFrame,
@@ -3049,20 +3305,20 @@ class AutoraterJudgeGenerator:
             item_callback=item_callback,
         )
 
+        candidate_labels = self._extract_rubric_labels(rubric_template)
         rows = []
         for res in batch_results:
             meta = res.request.metadata
-            label_text = res.generated_content.strip()
-            label_clean = re.sub(r'^(Classification:|Label:|Rating:)\s*', '', label_text, flags=re.IGNORECASE).strip()
-            label_first_line = label_clean.split('\n')[0].strip(' *"`')
-            if not label_first_line:
-                label_first_line = "No disclosure"
+            label_val, rationale_val = self._parse_autorater_output(
+                res.generated_content, candidate_labels
+            )
 
             rows.append({
                 "query": meta["query"],
                 "target_model": meta["target_model"],
                 "response": meta["response"],
-                "label": label_first_line,
+                "label": label_val,
+                "rationale": rationale_val,
                 "level1": meta.get("level1", ""),
                 "level2": meta.get("level2", ""),
                 "level3": meta.get("level3", ""),
@@ -3092,10 +3348,13 @@ def generate_dynamic_autoratings(
     if progress_callback:
         progress_callback(0.10, f"Dispatching {target_count} responses to {judge_model_name} (0/{target_count} rated)...")
 
+    candidate_labels = AutoraterJudgeGenerator._extract_rubric_labels(rubric_template)
+
     def _on_rated(done_cnt: int, total_cnt: int, res: GenerateContentResult):
         if progress_callback:
             pct = min(0.98, 0.10 + 0.88 * (done_cnt / max(total_cnt, 1)))
-            lbl = res.generated_content.strip().split("\n")[0].strip(' *"`')[:40]
+            lbl, _ = AutoraterJudgeGenerator._parse_autorater_output(res.generated_content, candidate_labels)
+            lbl = lbl[:40]
             progress_callback(pct, f"Rated {done_cnt}/{total_cnt} responses ({int(pct * 100)}%) — Latest verdict: {lbl or 'Rated'}")
 
     rated_df = judge.rate(
