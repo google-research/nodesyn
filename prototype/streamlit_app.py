@@ -2034,7 +2034,7 @@ elif st.session_state.step == "Taxonomy":
                          # Rationale
                          rationale_val = node_data.get('category_topic_rationale', node_data.get('rationale', ''))
                          if rationale_val:
-                             st.markdown("💡 **DOMAIN RATIONALE**")
+                             st.markdown("💡 **NODE RATIONALE**")
                              st.markdown(f"<div style='border-left: 3px solid #6366f1; padding: 8px 12px; background: #f8fafc; border-radius: 4px; color: #475569; font-size: 0.9em; margin-bottom: 12px;'>{rationale_val}</div>", unsafe_allow_html=True)
                              st.markdown("<br>", unsafe_allow_html=True)
                          
@@ -3282,44 +3282,52 @@ elif st.session_state.step == "Evaluation":
                     # Show Live Activity Feed (In-Flight queries or Latest Completed Responses)
                     recent_evs = bg_store.get("recent_events", [])
                     in_flight_qs = bg_store.get("in_flight_queries", [])
+
+                    def _clean_eval_feed_snippet(raw_val: Any, max_chars: int) -> str:
+                        import html as _eval_html
+                        txt = str(raw_val or "")
+                        txt = re.sub(r"(?m)^\s*#{1,6}\s+", "", txt)
+                        txt = txt.replace("**", "").replace("__", "").replace("`", "")
+                        txt = " ".join(txt.split())
+                        if len(txt) > max_chars:
+                            txt = txt[:max_chars] + "..."
+                        return _eval_html.escape(txt)
+
                     if recent_evs:
                         feed_items_html = ""
                         for ev in recent_evs[:3]:
-                            q_txt = str(ev.get("query", "")).replace("<", "&lt;").replace(">", "&gt;")
-                            r_txt = str(ev.get("response", "")).replace("<", "&lt;").replace(">", "&gt;")
-                            if len(q_txt) > 110:
-                                q_txt = q_txt[:110] + "..."
-                            if len(r_txt) > 160:
-                                r_txt = r_txt[:160] + "..."
-                            cat_txt = str(ev.get("category", "General")).replace("<", "&lt;").replace(">", "&gt;")
-                            feed_items_html += f"""
-<div style="background: white; border: 1px solid #e2e8f0; border-left: 3px solid #10b981; border-radius: 8px; padding: 0.55rem 0.85rem; margin-bottom: 0.45rem;">
-  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
-    <span style="font-size: 0.75rem; font-weight: 700; color: #059669;">✓ Query #{ev.get('idx')} Completed • {ev.get('model')}</span>
-    <span style="background: #f1f5f9; color: #475569; font-size: 0.7rem; font-weight: 600; padding: 1px 8px; border-radius: 999px;">{cat_txt}</span>
-  </div>
-  <div style="font-size: 0.8rem; color: #1e293b; font-weight: 600;">Q: "{q_txt}"</div>
-  <div style="font-size: 0.78rem; color: #64748b; margin-top: 2px;">A: {r_txt}</div>
-</div>"""
+                            q_txt = _clean_eval_feed_snippet(ev.get("query", ""), 110)
+                            r_txt = _clean_eval_feed_snippet(ev.get("response", ""), 160)
+                            cat_txt = _clean_eval_feed_snippet(ev.get("category", "General"), 60)
+                            feed_items_html += (
+                                f'<div style="background: white; border: 1px solid #e2e8f0; border-left: 3px solid #10b981; border-radius: 8px; padding: 0.55rem 0.85rem; margin-bottom: 0.45rem;">'
+                                f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">'
+                                f'<span style="font-size: 0.75rem; font-weight: 700; color: #059669;">✓ Query #{ev.get("idx")} Completed • {_clean_eval_feed_snippet(ev.get("model", ""), 50)}</span>'
+                                f'<span style="background: #f1f5f9; color: #475569; font-size: 0.7rem; font-weight: 600; padding: 1px 8px; border-radius: 999px;">{cat_txt}</span>'
+                                f'</div>'
+                                f'<div style="font-size: 0.8rem; color: #1e293b; font-weight: 600; line-height: 1.4;">Q: "{q_txt}"</div>'
+                                f'<div style="font-size: 0.78rem; color: #64748b; margin-top: 2px; line-height: 1.45;">A: {r_txt}</div>'
+                                f'</div>'
+                            )
                         st.markdown(
-                            f"""<div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.75rem 1rem; margin-top: 0.5rem; margin-bottom: 0.75rem;">
-                            <div style="font-size: 0.74rem; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;">📡 Latest Completed Model Responses</div>
-                            {feed_items_html}
-                            </div>""",
+                            f'<div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.75rem 1rem; margin-top: 0.5rem; margin-bottom: 0.75rem;">'
+                            f'<div style="font-size: 0.74rem; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;">📡 Latest Completed Model Responses</div>'
+                            f'{feed_items_html}'
+                            f'</div>',
                             unsafe_allow_html=True,
                         )
                     elif in_flight_qs:
                         flight_html = "".join(
-                            f'<li style="margin-bottom: 4px; color: #334155; font-size: 0.82rem;">'
+                            f'<li style="margin-bottom: 4px; color: #334155; font-size: 0.82rem; line-height: 1.4;">'
                             f'<span style="color: #2563eb; font-weight: 700;">[Worker #{idx+1}]</span> '
-                            f'"{str(q).replace("<", "&lt;").replace(">", "&gt;")[:120]}{"..." if len(str(q)) > 120 else ""}"</li>'
+                            f'"{_clean_eval_feed_snippet(q, 120)}"</li>'
                             for idx, q in enumerate(in_flight_qs[:5])
                         )
                         st.markdown(
-                            f"""<div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.75rem 1rem; margin-top: 0.5rem; margin-bottom: 0.75rem;">
-                            <div style="font-size: 0.74rem; font-weight: 800; color: #2563eb; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem;">🔄 Active Queries Currently Being Generated by {curr_model_name} (Batch 1)</div>
-                            <ul style="margin: 0; padding-left: 1.1rem; list-style-type: none;">{flight_html}</ul>
-                            </div>""",
+                            f'<div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.75rem 1rem; margin-top: 0.5rem; margin-bottom: 0.75rem;">'
+                            f'<div style="font-size: 0.74rem; font-weight: 800; color: #2563eb; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem;">🔄 Active Queries Currently Being Generated by {curr_model_name} (Batch 1)</div>'
+                            f'<ul style="margin: 0; padding-left: 1.1rem; list-style-type: none;">{flight_html}</ul>'
+                            f'</div>',
                             unsafe_allow_html=True,
                         )
 
@@ -3939,7 +3947,15 @@ Violation - Safety Issue
                         )
                         if not rated_results.empty:
                             st.session_state.autorater_data = rated_results
+                            st.session_state["saved_dynamic_rubric"] = rubric_input
                             st.session_state.annotation_started = True
+                            for k in list(st.session_state.keys()):
+                                if (
+                                    k in ("dynamic_autorater_filter_label", "analysis_insp_label")
+                                    or k.startswith(("analysis_cmp_chk_", "analysis_sunburst_chk_"))
+                                    or k.endswith("_failure_label_select")
+                                ):
+                                    st.session_state.pop(k, None)
                             st.toast(f"✅ Autorater completed for all {len(rated_results)} responses!")
                             st.rerun()
                     except GenerationCancelledError:
@@ -4341,7 +4357,7 @@ elif st.session_state.step == "Analysis":
         elif 'Model' not in df.columns:
             df['Model'] = 'Gemini Flash'
             
-        if 'label' in df.columns and 'Safety Status' not in df.columns:
+        if 'label' in df.columns:
             df['Safety Status'] = df['label']
         elif 'Safety Status' not in df.columns:
             df['Safety Status'] = 'Disclosure'
@@ -4371,11 +4387,11 @@ elif st.session_state.step == "Analysis":
                     demo_copy = demo_copy.explode('prompts')
                 demo_copy['prompts'] = demo_copy['prompts'].apply(to_flat_string)
 
-            for col in ['Domain', 'user_group', 'extracted_occupations', 'extracted_Demographics', 'extracted_Country', 'cleaned_Country', 'level1', 'level2', 'level3']:
+            for col in ['Domain', 'user_group', 'persona', 'extracted_occupations', 'extracted_Demographics', 'extracted_Country', 'cleaned_Country', 'level1', 'level2', 'level3']:
                 if col in demo_copy.columns:
                     demo_copy[col] = demo_copy[col].apply(to_flat_string)
 
-            lookup_cols = ['prompts', 'Domain', 'level1', 'level2', 'level3', 'user_group', 'extracted_occupations', 'extracted_Demographics', 'extracted_Country', 'cleaned_Country']
+            lookup_cols = ['prompts', 'Domain', 'level1', 'level2', 'level3', 'user_group', 'persona', 'extracted_occupations', 'extracted_Demographics', 'extracted_Country', 'cleaned_Country']
             avail_cols = [c for c in lookup_cols if c in demo_copy.columns]
             if avail_cols and 'prompts' in avail_cols:
                 meta_subset = demo_copy[avail_cols].drop_duplicates(subset=['prompts'])
@@ -4505,56 +4521,9 @@ elif st.session_state.step == "Analysis":
 
     # ── Extract & Normalize Dynamic Autorater Labels from Previous Tab ───────
     def extract_rubric_labels_from_text(rubric_str: str) -> list[str]:
-        """Extracts candidate classification labels defined in the Autorater rubric text."""
-        if not rubric_str or not str(rubric_str).strip():
-            return []
-        text = str(rubric_str)
-        labels: list[str] = []
-        # 1. Check bullet/numbered definitions like '- **Label Name**:' or '1. **Label Name** (note):'
-        for m in re.finditer(r"^\s*(?:[-*•]|\d+\.)\s*\*\*([^*:\n]{2,70})\*\*\s*(?:\([^)\n]*\))?\s*:", text, flags=re.MULTILINE):
-            cand = m.group(1).strip()
-            if cand and cand not in labels:
-                labels.append(cand)
-        # 2. Check lines after 'Response Format Constraint'
-        if "Response Format Constraint" in text:
-            after = text.split("Response Format Constraint", 1)[1]
-            skip_prefixes = (
-                "your output",
-                "output",
-                "please",
-                "provide",
-                "include",
-                "explain",
-                "first",
-                "then",
-                "rationale",
-                "reasoning",
-                "explanation",
-                "chain of thought",
-                "chain-of-thought",
-                "cot",
-                "format",
-                "return",
-                "write",
-                "step",
-                "input:",
-                "query:",
-                "llm response:",
-                "classification:",
-            )
-            for line in after.splitlines():
-                raw_line = line.strip()
-                if raw_line.lower().startswith(("input:", "### input", "query:")):
-                    break
-                s = raw_line.strip("-*•`\"' ")
-                if not s or s.startswith("#") or s.endswith(":"):
-                    continue
-                s_low = s.lower()
-                if any(s_low.startswith(p) for p in skip_prefixes):
-                    continue
-                if len(s) <= 80 and s not in labels:
-                    labels.append(s)
-        return labels
+        if not IS_STATIC_HOSTING:
+            return gemini_backend.AutoraterJudgeGenerator._extract_rubric_labels(str(rubric_str or ""))
+        return []
 
     active_concept_for_rubric = st.session_state.get("saved_concept", st.session_state.get("target_concept", "Medical Advice"))
     fallback_rubric_map = {
@@ -4587,10 +4556,7 @@ elif st.session_state.step == "Analysis":
 
     all_autorater_labels: list[str] = []
     if not df_med_plot_cleaned.empty:
-        if "label" in df_med_plot_cleaned.columns and (
-            "Safety Status" not in df_med_plot_cleaned.columns
-            or df_med_plot_cleaned["Safety Status"].isna().all()
-        ):
+        if "label" in df_med_plot_cleaned.columns:
             df_med_plot_cleaned["Safety Status"] = df_med_plot_cleaned["label"]
 
         canonical_by_lower = {lbl.lower(): lbl for lbl in rubric_defined_labels}
@@ -4599,9 +4565,11 @@ elif st.session_state.step == "Analysis":
             s = str(val).strip().strip("*\"'`") if pd.notna(val) else ""
             if not s or s.lower() in ("nan", "none", "null"):
                 return rubric_defined_labels[-1] if rubric_defined_labels else "Failure"
-            s_low = s.lower()
-            if s_low in canonical_by_lower:
-                return canonical_by_lower[s_low]
+            if s.lower() in canonical_by_lower:
+                return canonical_by_lower[s.lower()]
+            if not IS_STATIC_HOSTING:
+                lbl, _ = gemini_backend.AutoraterJudgeGenerator._parse_autorater_output(s, rubric_defined_labels)
+                return canonical_by_lower.get(lbl.lower(), lbl)
             return s
 
         df_med_plot_cleaned["Safety Status"] = df_med_plot_cleaned["Safety Status"].apply(normalize_autorater_status)
@@ -5221,7 +5189,25 @@ elif st.session_state.step == "Analysis":
     # ── Tab: Text Analysis — Per-Model Bi-gram Comparison ──────────────────────
     with tab_ngram:
         if not df_med_plot_cleaned.empty:
-            ngram_fail_label = render_single_failure_label_dropdown("analysis_ngram", "Text Analysis")
+            col_ng_src, col_ng_rat = st.columns(2)
+            with col_ng_src:
+                ngram_source_label = st.selectbox(
+                    "Analyze Text",
+                    options=["Model Responses", "Synthetic Queries"],
+                    index=0,
+                    key="analysis_ngram_text_source",
+                )
+                ngram_text_col = "response" if ngram_source_label == "Model Responses" else "prompts"
+            with col_ng_rat:
+                ng_sel_key = "analysis_ngram_failure_label_select"
+                if ng_sel_key in st.session_state and st.session_state[ng_sel_key] not in all_autorater_labels:
+                    st.session_state[ng_sel_key] = default_failure_label
+                ngram_fail_label = st.selectbox(
+                    "Rating",
+                    options=all_autorater_labels,
+                    index=default_failure_idx,
+                    key=ng_sel_key,
+                )
             import re
             from collections import Counter
 
@@ -5239,7 +5225,12 @@ elif st.session_state.step == "Analysis":
                           "scene", "sign", "background", "output", "words", "word", "explanations",
                           "explanation", "rationale", "third", "please", "without", "using",
                           "based", "dimly", "lit", "style", "drawn", "illustration", "visual",
-                          "visualize", "look", "see", "display", "prompt", "prompts"}
+                          "visualize", "look", "see", "display", "prompt", "prompts",
+                          "however", "additionally", "furthermore", "important", "note",
+                          "general", "information", "provide", "provided", "providing",
+                          "following", "consider", "ensure", "help", "helpful", "also",
+                          "more", "most", "some", "many", "such", "other", "specific",
+                          "always", "never", "make", "sure", "keep", "mind", "well", "very", "much"}
 
             # ── Domain Phrase & Keyword Removal ───────────────────────────────
             # Dynamically identify active domain(s) and filter the domain name itself
@@ -5357,14 +5348,14 @@ elif st.session_state.step == "Analysis":
             models = sorted(df_med_plot_cleaned["Model"].unique())
             model_ngram_data = {}
             for m in models:
-                top = get_model_ngrams(df_med_plot_cleaned, m, top_k=10, only_fails=True, fail_label=ngram_fail_label)
+                top = get_model_ngrams(df_med_plot_cleaned, m, text_column=ngram_text_col, top_k=10, only_fails=True, fail_label=ngram_fail_label)
                 model_ngram_data[m] = dict(top)
 
             has_any_fails = any(len(v) > 0 for v in model_ngram_data.values())
             if not has_any_fails:
-                st.info(f"💡 **0% Rate for '{ngram_fail_label}'!** No responses with Autorater label **'{ngram_fail_label}'** were detected across the evaluated models. Displaying top bi-grams across all evaluated queries below:")
+                st.info(f"💡 **0% Rate for '{ngram_fail_label}'!** No responses with Autorater label **'{ngram_fail_label}'** were detected across the evaluated models. Displaying top bi-grams across all evaluated {ngram_source_label.lower()} below:")
                 for m in models:
-                    model_ngram_data[m] = dict(get_model_ngrams(df_med_plot_cleaned, m, top_k=10, only_fails=False))
+                    model_ngram_data[m] = dict(get_model_ngrams(df_med_plot_cleaned, m, text_column=ngram_text_col, top_k=10, only_fails=False))
 
             # ── Part 1: Faceted bar chart — top bi-grams per model (2×2 grid) ──
             from plotly.subplots import make_subplots
@@ -5405,7 +5396,7 @@ elif st.session_state.step == "Analysis":
             fig_facet.update_layout(
                 font=FONT_STYLE,
                 title=dict(
-                    text=f"Top Bi-grams per Model ({ngram_fail_label})" if has_any_fails else "Top Bi-grams per Model (All Queries)",
+                    text=f"Top {ngram_source_label} Bi-grams per Model ({ngram_fail_label})" if has_any_fails else f"Top {ngram_source_label} Bi-grams per Model (All Evaluated)",
                     font=dict(size=17, family="'Inter', sans-serif", color="#0f172a"),
                 ),
                 paper_bgcolor="white",
@@ -5431,9 +5422,9 @@ elif st.session_state.step == "Analysis":
             shared_phrases = set.intersection(*all_phrase_sets.values()) if all_phrase_sets else set()
             unique_phrases = {m: phrases - shared_phrases for m, phrases in all_phrase_sets.items()}
 
-            st.markdown("""
+            st.markdown(f"""
 <div style="display: flex; align-items: center; gap: 0.5rem; margin: 1.5rem 0 0.75rem 0;">
-  <span style="font-size: 0.85rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-family: 'Inter', sans-serif;">🔍 Shared vs Unique Failure Phrases</span>
+  <span style="font-size: 0.85rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-family: 'Inter', sans-serif;">🔍 Shared vs Unique {ngram_source_label} Phrases ({ngram_fail_label})</span>
 </div>
 """, unsafe_allow_html=True)
 
@@ -5924,9 +5915,9 @@ details.expand-phrases[open] > summary {
 </div>
 """, unsafe_allow_html=True)
 
-    insp_tab1, insp_tab2 = st.tabs([
-        "🔍 Inspect Rated Responses",
+    insp_tab2, insp_tab1 = st.tabs([
         "⚖️ Side-by-Side Query Comparator",
+        "🔍 Inspect Rated Responses",
     ])
 
     with insp_tab1:
@@ -5938,6 +5929,10 @@ details.expand-phrases[open] > summary {
                 insp_df["response"] = ""
             if "rationale" not in insp_df.columns:
                 insp_df["rationale"] = ""
+            if "persona" in insp_df.columns:
+                insp_df["user_group"] = insp_df["persona"].where(
+                    insp_df["persona"].astype(str).str.strip().ne(""), insp_df.get("user_group", "General Public")
+                )
             insp_df["rationale"] = insp_df["rationale"].fillna("").astype(str).replace({"nan": "", "None": ""})
             has_insp_rationale = insp_df["rationale"].str.strip().ne("").any()
 
@@ -6035,7 +6030,7 @@ details.expand-phrases[open] > summary {
                 "Safety Status": st.column_config.TextColumn("Autorater Label", width="medium"),
                 "level1": st.column_config.TextColumn("L1 Category", width="medium"),
                 "level2": st.column_config.TextColumn("L2 Subtopic", width="medium"),
-                "user_group": st.column_config.TextColumn("User Group", width="small"),
+                "user_group": st.column_config.TextColumn("Persona", width="small"),
                 "extracted_Country": st.column_config.TextColumn("Country", width="small"),
             }
             if has_insp_rationale:
@@ -6084,6 +6079,17 @@ details.expand-phrases[open] > summary {
             else:
                 sbs_queries = all_sbs_queries
 
+            sbs_search_kw = st.text_input(
+                "🔎 Search Query to Compare Side-by-Side",
+                placeholder="Type any keywords to search and find a specific query...",
+                key="analysis_sbs_query_search",
+            )
+            if sbs_search_kw and sbs_search_kw.strip():
+                kw_tokens = [tok.lower() for tok in sbs_search_kw.strip().split() if tok.strip()]
+                sbs_queries = [q for q in sbs_queries if all(tok in q.lower() for tok in kw_tokens)]
+                if "analysis_sbs_query_select" in st.session_state and st.session_state["analysis_sbs_query_select"] not in sbs_queries and sbs_queries:
+                    st.session_state["analysis_sbs_query_select"] = sbs_queries[0]
+
             if sbs_queries:
                 selected_sbs_query = st.selectbox(
                     "Select a Query to Compare Responses & Ratings Side-by-Side",
@@ -6092,25 +6098,97 @@ details.expand-phrases[open] > summary {
                 )
                 q_rows = sbs_df[sbs_df["prompts"].astype(str) == str(selected_sbs_query)].copy()
                 if not q_rows.empty:
+                    def _render_compact_markdown_html(
+                        raw_text: Any,
+                        font_size: str = "0.82rem",
+                        color: str = "#334155",
+                        heading_color: str = "#0f172a",
+                    ) -> str:
+                        text_norm = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+                        if not text_norm:
+                            return ""
+
+                        def _inline_md(escaped_line: str) -> str:
+                            s = re.sub(
+                                r"`([^`]+)`",
+                                r'<code style="font-size: 0.76rem; background: #e2e8f0; color: #0f172a; padding: 1px 4px; border-radius: 4px;">\1</code>',
+                                escaped_line,
+                            )
+                            s = re.sub(
+                                r"\*\*(.+?)\*\*",
+                                f'<strong style="font-weight: 700; color: {heading_color};">\\1</strong>',
+                                s,
+                            )
+                            s = re.sub(
+                                r"__(.+?)__",
+                                f'<strong style="font-weight: 700; color: {heading_color};">\\1</strong>',
+                                s,
+                            )
+                            s = re.sub(r"(?<!\*)\*([^\*\n]+)\*(?!\*)", r"<em>\1</em>", s)
+                            return s
+
+                        parts: list[str] = []
+                        last_was_spacer = False
+                        for raw_line in text_norm.split("\n"):
+                            stripped = raw_line.strip()
+                            if not stripped:
+                                if parts and not last_was_spacer:
+                                    parts.append('<div style="height: 0.35rem;"></div>')
+                                    last_was_spacer = True
+                                continue
+                            last_was_spacer = False
+                            if re.match(r"^([-*_]){3,}$", stripped):
+                                parts.append('<hr style="border: none; border-top: 1px solid #e2e8f0; margin: 0.35rem 0;">')
+                                continue
+                            m_hdr = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+                            if m_hdr:
+                                hdr_txt = _inline_md(_html.escape(m_hdr.group(2).strip()))
+                                parts.append(
+                                    f'<div style="font-size: 0.84rem; font-weight: 700; color: {heading_color}; margin-top: 0.35rem; margin-bottom: 0.1rem; line-height: 1.4;">{hdr_txt}</div>'
+                                )
+                                continue
+                            m_ul = re.match(r"^[-*•]\s+(.*)$", stripped)
+                            if m_ul:
+                                item_txt = _inline_md(_html.escape(m_ul.group(1).strip()))
+                                parts.append(
+                                    f'<div style="font-size: {font_size}; color: {color}; line-height: 1.5; padding-left: 0.75rem; margin-bottom: 0.12rem;">• {item_txt}</div>'
+                                )
+                                continue
+                            m_ol = re.match(r"^(\d+[\.\)])\s+(.*)$", stripped)
+                            if m_ol:
+                                num_lbl = _html.escape(m_ol.group(1))
+                                item_txt = _inline_md(_html.escape(m_ol.group(2).strip()))
+                                parts.append(
+                                    f'<div style="font-size: {font_size}; color: {color}; line-height: 1.5; padding-left: 0.75rem; margin-bottom: 0.12rem;"><span style="font-weight: 600; color: {heading_color};">{num_lbl}</span> {item_txt}</div>'
+                                )
+                                continue
+                            line_txt = _inline_md(_html.escape(stripped))
+                            parts.append(
+                                f'<div style="font-size: {font_size}; color: {color}; line-height: 1.5; margin-bottom: 0.1rem;">{line_txt}</div>'
+                            )
+                        return "".join(parts)
+
                     first_row = q_rows.iloc[0]
                     q_l1 = _html.escape(str(first_row.get("level1", "General")))
                     q_l2 = _html.escape(str(first_row.get("level2", "General")))
                     q_ug = _html.escape(str(first_row.get("user_group", "General Public")))
                     q_ctry = _html.escape(str(first_row.get("extracted_Country", "Global")))
-                    q_escaped = _html.escape(str(selected_sbs_query))
+                    q_escaped = _html.escape(" ".join(str(selected_sbs_query).split()))
 
-                    st.markdown(f"""
-<div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1rem 1.25rem; margin: 0.5rem 0 1rem 0;">
-  <div style="font-size: 0.72rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.35rem;">Evaluated Prompt / Query</div>
-  <div style="font-size: 0.98rem; font-weight: 600; color: #0f172a; line-height: 1.5; margin-bottom: 0.65rem;">{q_escaped}</div>
-  <div style="display: flex; flex-wrap: wrap; gap: 0.45rem;">
-    <span style="background: #eef2ff; color: #4338ca; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.73rem; font-weight: 600;">L1: {q_l1}</span>
-    <span style="background: #f0fdf4; color: #15803d; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.73rem; font-weight: 600;">L2: {q_l2}</span>
-    <span style="background: #fdf2f8; color: #be185d; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.73rem; font-weight: 600;">User Group: {q_ug}</span>
-    <span style="background: #f1f5f9; color: #334155; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.73rem; font-weight: 600;">Country: {q_ctry}</span>
-  </div>
-</div>
-""", unsafe_allow_html=True)
+                    st.markdown(
+                        f'<style>.sbs-compact-card h1, .sbs-compact-card h2, .sbs-compact-card h3, .sbs-compact-card h4, .sbs-compact-card h5, .sbs-compact-card h6, .sbs-compact-card p, .sbs-compact-card li {{ font-size: 0.82rem !important; line-height: 1.5 !important; margin: 0.15rem 0 !important; }}</style>'
+                        f'<div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1rem 1.25rem; margin: 0.5rem 0 1rem 0;">'
+                        f'<div style="font-size: 0.72rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.35rem;">Evaluated Prompt / Query</div>'
+                        f'<div style="font-size: 0.92rem; font-weight: 600; color: #0f172a; line-height: 1.5; margin-bottom: 0.65rem;">{q_escaped}</div>'
+                        f'<div style="display: flex; flex-wrap: wrap; gap: 0.45rem;">'
+                        f'<span style="background: #eef2ff; color: #4338ca; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.73rem; font-weight: 600;">L1: {q_l1}</span>'
+                        f'<span style="background: #f0fdf4; color: #15803d; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.73rem; font-weight: 600;">L2: {q_l2}</span>'
+                        f'<span style="background: #fdf2f8; color: #be185d; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.73rem; font-weight: 600;">User Group: {q_ug}</span>'
+                        f'<span style="background: #f1f5f9; color: #334155; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.73rem; font-weight: 600;">Country: {q_ctry}</span>'
+                        f'</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
 
                     def _get_badge_colors(lbl_str: str) -> tuple[str, str, str]:
                         l_low = lbl_str.lower()
@@ -6141,27 +6219,33 @@ details.expand-phrases[open] > summary {
 
                             m_name_esc = _html.escape(str(m_name))
                             m_lbl_esc = _html.escape(m_lbl)
-                            m_resp_esc = _html.escape(m_resp)
+                            m_resp_html = _render_compact_markdown_html(
+                                m_resp, font_size="0.82rem", color="#334155", heading_color="#0f172a"
+                            )
                             rat_block_html = ""
                             if m_rat:
-                                m_rat_esc = _html.escape(m_rat)
-                                rat_block_html = f"""
-  <div style="background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 6px; padding: 0.6rem 0.75rem; margin-bottom: 0.75rem;">
-    <div style="font-size: 0.68rem; font-weight: 800; color: #1d4ed8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.2rem;">🧠 Judge Rationale</div>
-    <div style="font-size: 0.8rem; color: #1e3a8a; line-height: 1.45; white-space: pre-wrap;">{m_rat_esc}</div>
-  </div>"""
+                                m_rat_html = _render_compact_markdown_html(
+                                    m_rat, font_size="0.8rem", color="#1e3a8a", heading_color="#1e3a8a"
+                                )
+                                rat_block_html = (
+                                    f'<div style="background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 6px; padding: 0.6rem 0.75rem; margin-bottom: 0.75rem;">'
+                                    f'<div style="font-size: 0.68rem; font-weight: 800; color: #1d4ed8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.2rem;">🧠 Judge Rationale</div>'
+                                    f'<div class="sbs-compact-card" style="font-size: 0.8rem; color: #1e3a8a; line-height: 1.45;">{m_rat_html}</div>'
+                                    f'</div>'
+                                )
 
                             with sbs_cols[c_idx]:
-                                st.markdown(f"""
-<div style="background: white; border: 1px solid #e2e8f0; border-top: 4px solid {m_accent}; border-radius: 12px; padding: 1rem; height: 100%; box-shadow: 0 1px 2px rgba(15,23,42,0.04);">
-  <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap;">
-    <div style="font-size: 0.95rem; font-weight: 800; color: #0f172a; font-family: 'Inter', sans-serif;">{m_name_esc}</div>
-    <span style="background: {b_bg}; color: {b_fg}; border: 1px solid {b_border}; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700;">{m_lbl_esc}</span>
-  </div>{rat_block_html}
-  <div style="font-size: 0.68rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Model Response</div>
-  <div style="font-size: 0.82rem; color: #334155; line-height: 1.55; white-space: pre-wrap; max-height: 340px; overflow-y: auto; background: #f8fafc; padding: 0.65rem 0.75rem; border-radius: 8px; border: 1px solid #f1f5f9;">{m_resp_esc}</div>
-</div>
-""", unsafe_allow_html=True)
+                                st.markdown(
+                                    f'<div class="sbs-compact-card" style="background: white; border: 1px solid #e2e8f0; border-top: 4px solid {m_accent}; border-radius: 12px; padding: 1rem; height: 100%; box-shadow: 0 1px 2px rgba(15,23,42,0.04);">'
+                                    f'<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap;">'
+                                    f'<div style="font-size: 0.95rem; font-weight: 800; color: #0f172a; font-family: \'Inter\', sans-serif;">{m_name_esc}</div>'
+                                    f'<span style="background: {b_bg}; color: {b_fg}; border: 1px solid {b_border}; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700;">{m_lbl_esc}</span>'
+                                    f'</div>{rat_block_html}'
+                                    f'<div style="font-size: 0.68rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Model Response</div>'
+                                    f'<div style="font-size: 0.82rem; color: #334155; line-height: 1.5; max-height: 340px; overflow-y: auto; background: #f8fafc; padding: 0.65rem 0.75rem; border-radius: 8px; border: 1px solid #f1f5f9;">{m_resp_html}</div>'
+                                    f'</div>',
+                                    unsafe_allow_html=True,
+                                )
             else:
                 st.info("No queries available for comparison.")
         else:

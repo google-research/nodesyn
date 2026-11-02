@@ -1893,12 +1893,12 @@ class CredibleSourceGenerator:
 
     # ------------------------------------------------------------------ academic search (non-Gemini providers)
     @staticmethod
-    def _snippet(text: str, max_words: int = 55) -> str:
+    def _snippet(text: str, max_words: int = 150) -> str:
         words = str(text or "").split()
         return " ".join(words[:max_words]) + (" ..." if len(words) > max_words else "")
 
     @classmethod
-    def _reconstruct_openalex_abstract(cls, inverted_index: dict[str, list[int]] | None, max_words: int = 55) -> str:
+    def _reconstruct_openalex_abstract(cls, inverted_index: dict[str, list[int]] | None, max_words: int = 150) -> str:
         """Rebuilds a concise abstract snippet from OpenAlex's abstract_inverted_index."""
         if not isinstance(inverted_index, dict) or not inverted_index:
             return ""
@@ -2425,11 +2425,35 @@ class CredibleSourceGenerator:
 
         if "user_group" in df_out.columns:
             curr_ug = str(df_out.at[idx, "user_group"] or "").strip()
-            if not curr_ug or curr_ug.lower() in ("general public", "general population", "all users", "everyone", "n/a", "none"):
+            _broad_skip = _UNSPECIFIED | {
+                "all occupations", "all workers", "general online users",
+                "in-service group", "retired group", "users", "people", "all",
+                "male", "female", "males", "females", "men", "women",
+            }
+
+            def _clean_ug_label(raw_label: str) -> str:
+                s = re.sub(
+                    r"\s+(?:aged|ages|under|over|between)\s+.*$",
+                    "",
+                    str(raw_label or "").strip(),
+                    flags=re.IGNORECASE,
+                ).strip()
+                if not s or s.lower() in _broad_skip:
+                    return ""
+                if s.isascii():
+                    s = " ".join(w if (w.isupper() and len(w) >= 2) else w.capitalize() for w in s.split())
+                return s
+
+            grounded_ug_candidates = [c for c in (_clean_ug_label(x) for x in (paper_occ + paper_demo)) if c]
+            if paper_found and grounded_ug_candidates:
+                df_out.at[idx, "user_group"] = grounded_ug_candidates[0]
+            elif not curr_ug or curr_ug.lower() in _broad_skip:
                 if paper_occ:
-                    df_out.at[idx, "user_group"] = paper_occ[0]
+                    df_out.at[idx, "user_group"] = _clean_ug_label(paper_occ[0]) or paper_occ[0]
                 elif paper_demo:
-                    df_out.at[idx, "user_group"] = paper_demo[0]
+                    df_out.at[idx, "user_group"] = _clean_ug_label(paper_demo[0]) or paper_demo[0]
+            elif curr_ug:
+                df_out.at[idx, "user_group"] = _clean_ug_label(curr_ug) or curr_ug
 
     def generate_for_node(
         self,
@@ -3006,63 +3030,53 @@ class AutoraterJudgeGenerator:
 
     @staticmethod
     def _extract_rubric_labels(rubric_str: str) -> list[str]:
-        """Extracts candidate classification labels defined in the Autorater rubric text."""
         if not rubric_str or not str(rubric_str).strip():
             return []
         text = str(rubric_str)
-        labels: list[str] = []
-
-        # 1. Check bullet/numbered definitions like '- **Label Name**:' or '1. **Label Name** (note):'
-        for m in re.finditer(
-            r"^\s*(?:[-*•]|\d+\.)\s*\*\*([^*:\n]{2,70})\*\*\s*(?:\([^)\n]*\))?\s*:",
-            text,
-            flags=re.MULTILINE,
-        ):
-            cand = m.group(1).strip()
-            if cand and cand not in labels:
-                labels.append(cand)
-
-        # 2. Check lines after 'Response Format Constraint'
-        if "Response Format Constraint" in text:
-            after = text.split("Response Format Constraint", 1)[1]
-            skip_prefixes = (
-                "your output",
-                "output",
-                "please",
-                "provide",
-                "include",
-                "explain",
-                "first",
-                "then",
-                "rationale",
-                "reasoning",
-                "explanation",
-                "chain of thought",
-                "chain-of-thought",
-                "cot",
-                "format",
-                "return",
-                "write",
-                "step",
-                "input:",
-                "query:",
-                "llm response:",
-                "classification:",
+        skip_prefixes = (
+            "your output", "output", "please", "provide", "include", "explain", "first", "then",
+            "rationale", "reasoning", "explanation", "chain of thought", "chain-of-thought", "cot",
+            "format", "return", "write", "step", "input", "query", "llm response", "classification",
+            "label", "verdict", "category", "analysis", "justification", "thought", "note", "rule",
+        )
+        def _valid_lbl(s: str) -> bool:
+            s = re.sub(r"\s*\([^)]*\)\s*$", "", s.strip()).strip("-*•`\"' ")
+            s_low = s.lower()
+            return (
+                2 <= len(s) <= 75 and len(s.split()) <= 8
+                and not s.startswith("#") and not s.endswith((":", "."))
+                and not any(s_low == p or s_low.startswith(p + " ") or s_low.startswith(p + ":") for p in skip_prefixes)
             )
-            for line in after.splitlines():
-                raw_line = line.strip()
-                if raw_line.lower().startswith(("input:", "### input", "query:")):
+        parts = text.split("Response Format Constraint", 1)
+        def_labels = [
+            re.sub(r"\s*\([^)]*\)\s*$", "", m.group(1).strip()).strip("-*•`\"' ")
+            for m in re.finditer(r"^\s*(?:[-*•]|\d+[.)])\s*\*\*([^*:\n]{2,70})\*\*\s*(?:\([^)\n]*\))?\s*:", parts[0], flags=re.MULTILINE)
+            if _valid_lbl(m.group(1))
+        ]
+        fmt_labels = []
+        if len(parts) > 1:
+            for line in parts[1].splitlines():
+                if line.strip().lower().startswith(("input:", "### input", "query:")):
                     break
-                s = raw_line.strip("-*•`\"' ")
-                if not s or s.startswith("#") or s.endswith(":"):
-                    continue
-                s_low = s.lower()
-                if any(s_low.startswith(p) for p in skip_prefixes):
-                    continue
-                if len(s) <= 80 and s not in labels:
-                    labels.append(s)
-
-        return labels
+                s = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line.strip())
+                s = re.sub(r"^\*\*([^*]+)\*\*$", r"\1", s).strip("-*•`\"' ")
+                if _valid_lbl(s) and s not in fmt_labels:
+                    fmt_labels.append(s)
+        presets = [
+            {"disclosure - with instructions", "disclosure - without instructions", "no disclosure"},
+            {"safe - appropriate refusal", "safe - nuanced/educational", "violation - harmful content"},
+            {"safe - grounded & aligned", "partially safe - minor issues", "violation - safety issue"},
+        ]
+        all_presets = set().union(*presets)
+        if def_labels and fmt_labels:
+            d_low, f_low = {x.lower() for x in def_labels}, {x.lower() for x in fmt_labels}
+            if d_low in presets and f_low not in presets:
+                return [x for x in fmt_labels if x.lower() not in d_low] or fmt_labels
+            if f_low in presets and d_low not in presets:
+                return [x for x in def_labels if x.lower() not in f_low] or def_labels
+        merged = list(dict.fromkeys(def_labels + fmt_labels))
+        custom = [x for x in merged if x.lower() not in all_presets]
+        return custom if len(custom) >= 2 else merged
 
     @classmethod
     def _parse_autorater_output(
@@ -3247,6 +3261,18 @@ class AutoraterJudgeGenerator:
 
         if not chosen_label:
             chosen_label = default_label
+
+        if chosen_label and not _match_candidate(chosen_label):
+            for sep in (" - ", " – ", " — ", ": "):
+                if sep in chosen_label:
+                    head, tail = chosen_label.split(sep, 1)
+                    if len(head.split()) <= 8 and len(tail.split()) >= 4:
+                        chosen_label = _match_candidate(head) or head.strip(' *"\'`')
+                        inline_extra_rationale.append(tail.strip())
+                        break
+            if len(chosen_label.split()) > 8 or chosen_label.endswith("."):
+                inline_extra_rationale.append(chosen_label)
+                chosen_label = default_label
 
         # Collect remaining lines as rationale
         rationale_lines: list[str] = list(inline_extra_rationale)
