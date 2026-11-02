@@ -1,9 +1,0 @@
-streamlit
-pandas
-plotly
-google-genai
-openai
-anthropic
-requests
-httpx
-certifi
